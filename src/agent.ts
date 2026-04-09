@@ -7,6 +7,7 @@ import type { Env, TelemetryEvent, TelemetryBatch, Anomaly, SentinelState, Inges
 import { tier1BatchFilter } from "./tier1";
 import { detectAnomaly, getBaseline, upsertBaseline, updateBaselineStats, recordAnomaly } from "./tier2";
 import { generateNarrative } from "./tier3";
+import { runCompaction } from "./compaction";
 
 export class SentinelAgent extends DurableObject<Env> {
   private state: SentinelState = {
@@ -22,6 +23,30 @@ export class SentinelAgent extends DurableObject<Env> {
     super(ctx, env);
     this.initStorage();
     this.loadState();
+    this.scheduleCompaction();
+  }
+
+  private scheduleCompaction(): void {
+    // Schedule daily compaction at 3 AM UTC
+    const now = new Date();
+    const next3AM = new Date(now);
+    next3AM.setUTCHours(3, 0, 0, 0);
+    if (next3AM.getTime() <= now.getTime()) {
+      next3AM.setUTCDate(next3AM.getUTCDate() + 1);
+    }
+    this.ctx.storage.setAlarm(next3AM.getTime());
+  }
+
+  async alarm(): Promise<void> {
+    // Daily compaction: decay baselines, purge old anomalies, clean stale domains
+    const stats = runCompaction(this.ctx.storage.sql);
+    console.log(`Compaction complete: ${JSON.stringify(stats)}`);
+
+    // Store last compaction stats
+    await this.ctx.storage.put("last_compaction", stats);
+
+    // Reschedule for tomorrow
+    this.scheduleCompaction();
   }
 
   private initStorage(): void {
@@ -667,6 +692,19 @@ export class SentinelAgent extends DurableObject<Env> {
           .exec("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT ?", limit)
           .toArray();
         return Response.json(rows, { headers: corsHeaders });
+      }
+
+      // Compaction status
+      if (path === "/compaction") {
+        const lastCompaction = await this.ctx.storage.get("last_compaction");
+        return Response.json(lastCompaction || { message: "No compaction has run yet. Scheduled daily at 3 AM UTC." }, { headers: corsHeaders });
+      }
+
+      // Force compaction (manual trigger)
+      if (path === "/compaction" && request.method === "POST") {
+        const stats = runCompaction(this.ctx.storage.sql);
+        await this.ctx.storage.put("last_compaction", stats);
+        return Response.json(stats, { headers: corsHeaders });
       }
 
       // Hourly baselines — the daily rhythm
