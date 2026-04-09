@@ -4,13 +4,25 @@
 
 Built entirely on Cloudflare Workers, Durable Objects, R2, and D1. No boxes. No agents to install. No log shipping. The intelligence lives where the traffic lives — at the edge.
 
-## The Problem
+## The Problem: The Small Pot
 
-For 30 years, cybersecurity has been cutting the ends off the ham.
+There's an old family story. A daughter watches her mother cut the ends off the ham before putting it in the roasting pan. Every holiday, same ritual. She grows up and does the same thing. One day she finally asks her mother why.
 
-The industry forces you to ship your network telemetry to someone else's cloud, pay per GB for ingestion, and wait for a dashboard to tell you about the threat they've already cataloged. Normal traffic — the 99% that defines what your network actually looks like — gets discarded because the pot is too small to store it.
+"Because that's how my mother did it."
 
-AI-generated attacks are novel by default. Signature-based detection is collapsing. The only durable defense is *knowing your own network so well that anomalies are obvious*.
+So they ask the grandmother. She laughs.
+
+*"I cut the ends off because the only pot I had was too small to fit the whole ham."*
+
+Three generations of wasted ham because nobody questioned a constraint that no longer existed.
+
+**That's the cybersecurity industry.**
+
+For 30 years, we've been cutting the ends off the data. Ship your logs to someone else's cloud. Pay per GB for ingestion. Wait for a dashboard to tell you about the threat they've already cataloged. Normal traffic — the 99% that defines what your network actually looks like — gets discarded. The pot was too small.
+
+The pot isn't small anymore. Cloudflare R2 has zero egress costs. Durable Objects give you persistent state at the edge. The kitchen is the entire global network. But the industry keeps cutting the ends off the ham — because that's how it's always been done.
+
+Meanwhile, AI-generated attacks are novel by default. Signature-based detection is collapsing. The only durable defense is *knowing your own network so well that anomalies are obvious*.
 
 ## The Architecture
 
