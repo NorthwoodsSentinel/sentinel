@@ -6,6 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env, TelemetryEvent, TelemetryBatch, Anomaly, SentinelState, IngestResponse } from "./types";
 import { tier1BatchFilter } from "./tier1";
 import { detectAnomaly, getBaseline, upsertBaseline, updateBaselineStats, recordAnomaly } from "./tier2";
+import { generateNarrative } from "./tier3";
 
 export class SentinelAgent extends DurableObject<Env> {
   private state: SentinelState = {
@@ -136,6 +137,38 @@ export class SentinelAgent extends DurableObject<Env> {
       }
     }
 
+    // Tier 3: Generate LLM narratives for medium+ anomalies (async, non-blocking)
+    if (this.env.ANTHROPIC_API_KEY) {
+      const recentAnomalies = this.getRecentAnomaliesLocal(20);
+      for (const event of needs_analysis) {
+        const currentBaseline = this.getBaselineLocal(event.source, event.metric);
+        const matchingAnomaly = recentAnomalies.find(
+          a => a.source === event.source && a.metric === event.metric && !a.narrative &&
+               (a.severity === "medium" || a.severity === "high" || a.severity === "critical")
+        );
+        if (matchingAnomaly) {
+          this.ctx.waitUntil(
+            generateNarrative(
+              {
+                anomaly: matchingAnomaly,
+                baseline: currentBaseline,
+                recentAnomalies,
+                totalEventsIngested: this.state.total_events_ingested,
+              },
+              this.env.ANTHROPIC_API_KEY
+            ).then(narrative => {
+              this.ctx.storage.sql.exec(
+                "UPDATE anomalies SET narrative = ? WHERE id = ?",
+                narrative, matchingAnomaly.id
+              );
+            }).catch(err => {
+              console.error(`Tier 3 narrative failed for ${matchingAnomaly.id}:`, err);
+            })
+          );
+        }
+      }
+    }
+
     // Store raw telemetry in R2 ("Dawn of Time")
     const r2Key = `telemetry/${batch.events[0]?.source || "unknown"}/${Date.now()}.json`;
     await this.env.TELEMETRY_R2.put(r2Key, JSON.stringify(batch));
@@ -204,6 +237,25 @@ export class SentinelAgent extends DurableObject<Env> {
       anomaly.z_score, anomaly.severity, anomaly.narrative || null, anomaly.detected_at,
       anomaly.acknowledged ? 1 : 0
     );
+  }
+
+  private getRecentAnomaliesLocal(limit: number): Anomaly[] {
+    const rows = this.ctx.storage.sql
+      .exec("SELECT * FROM anomalies ORDER BY detected_at DESC LIMIT ?", limit)
+      .toArray();
+
+    return rows.map((row) => ({
+      id: row.id as string,
+      source: row.source as string,
+      metric: row.metric as string,
+      expected: row.expected as number,
+      actual: row.actual as number,
+      z_score: row.z_score as number,
+      severity: row.severity as import("./types").AnomalySeverity,
+      narrative: row.narrative as string | undefined,
+      detected_at: row.detected_at as number,
+      acknowledged: (row.acknowledged as number) === 1,
+    }));
   }
 
   // --- Query APIs ---
@@ -287,6 +339,26 @@ export class SentinelAgent extends DurableObject<Env> {
       if (path === "/baselines") {
         const baselines = await this.getBaselines();
         return Response.json(baselines, { headers: corsHeaders });
+      }
+
+      if (path === "/narrative" && request.method === "POST") {
+        if (!this.env.ANTHROPIC_API_KEY) {
+          return Response.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 503, headers: corsHeaders });
+        }
+        const { anomaly_id } = await request.json() as { anomaly_id: string };
+        const anomalies = this.getRecentAnomaliesLocal(100);
+        const anomaly = anomalies.find(a => a.id === anomaly_id);
+        if (!anomaly) {
+          return Response.json({ error: "Anomaly not found" }, { status: 404, headers: corsHeaders });
+        }
+        const baseline = this.getBaselineLocal(anomaly.source, anomaly.metric);
+        const narrative = await generateNarrative(
+          { anomaly, baseline, recentAnomalies: anomalies, totalEventsIngested: this.state.total_events_ingested },
+          this.env.ANTHROPIC_API_KEY
+        );
+        // Update the stored anomaly with the narrative
+        this.ctx.storage.sql.exec("UPDATE anomalies SET narrative = ? WHERE id = ?", narrative, anomaly_id);
+        return Response.json({ anomaly_id, narrative }, { headers: corsHeaders });
       }
 
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });

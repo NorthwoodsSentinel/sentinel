@@ -4,7 +4,7 @@ export interface Env {
   SENTINEL_AGENT: DurableObjectNamespace;
   TELEMETRY_R2: R2Bucket;
   BASELINE_D1: D1Database;
-  ANTHROPIC_API_KEY: string;
+  ANTHROPIC_API_KEY?: string;
   ENVIRONMENT: string;
 }
 
