@@ -22,7 +22,7 @@ bucket_name = "sentinel-telemetry"
 [[d1_databases]]
 binding = "BASELINE_D1"
 database_name = "sentinel-baselines"
-database_id = "" # Will be filled after creation
+database_id = "34ff387c-f115-44c1-8788-ecfae235a925"
 
 # Environment variables (secrets set via wrangler secret put)
 [vars]
