@@ -1,0 +1,23 @@
+{
+  "name": "sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Edge-native network intelligence — AI that knows how a network lives",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "agents": "^0.0.80",
+    "@cloudflare/ai-chat": "^0.0.10"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260401.0",
+    "typescript": "^5.8.0",
+    "wrangler": "^4.0.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,29 @@
+name = "sentinel"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Durable Objects — the Sentinel Agent brain
+[durable_objects]
+bindings = [
+  { name = "SENTINEL_AGENT", class_name = "SentinelAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SentinelAgent"]
+
+# R2 — "Dawn of Time" telemetry storage
+[[r2_buckets]]
+binding = "TELEMETRY_R2"
+bucket_name = "sentinel-telemetry"
+
+# D1 — Baseline state and anomaly index
+[[d1_databases]]
+binding = "BASELINE_D1"
+database_name = "sentinel-baselines"
+database_id = "" # Will be filled after creation
+
+# Environment variables (secrets set via wrangler secret put)
+[vars]
+ENVIRONMENT = "development"
