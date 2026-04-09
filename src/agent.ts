@@ -105,6 +105,23 @@ export class SentinelAgent extends DurableObject<Env> {
         payload TEXT
       )
     `);
+
+    // Time-of-day baselines — separate stats per hour (0-23)
+    // "31 clients at 3 PM is normal. 31 clients at 3 AM is not."
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS hourly_baselines (
+        source TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        mean REAL NOT NULL,
+        stddev REAL NOT NULL,
+        count INTEGER NOT NULL,
+        min_val REAL NOT NULL,
+        max_val REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (source, metric, hour)
+      )
+    `);
   }
 
   private async loadState(): Promise<void> {
@@ -147,7 +164,9 @@ export class SentinelAgent extends DurableObject<Env> {
 
     // Tier 2: Statistical analysis for events that passed Tier 1
     for (const event of needs_analysis) {
-      // Update baseline with this event
+      const currentHour = new Date(event.timestamp).getUTCHours();
+
+      // Update global baseline
       const currentBaseline = this.getBaselineLocal(event.source, event.metric);
       const updated = updateBaselineStats(currentBaseline, {
         source: event.source,
@@ -157,15 +176,25 @@ export class SentinelAgent extends DurableObject<Env> {
       });
       this.upsertBaselineLocal(updated);
 
+      // Update hourly baseline (time-of-day awareness)
+      this.upsertHourlyBaseline(event.source, event.metric, currentHour, event.value, event.timestamp);
+
+      // Choose the best baseline for anomaly detection:
+      // - Use hourly baseline if it has enough data (more precise)
+      // - Fall back to global baseline otherwise
+      const hourlyBaseline = this.getHourlyBaseline(event.source, event.metric, currentHour);
+      const bestBaseline = (hourlyBaseline && hourlyBaseline.count >= 5) ? hourlyBaseline : currentBaseline;
+
       // Check for anomaly against the PREVIOUS baseline (before this event)
-      if (currentBaseline && currentBaseline.count >= 10) {
-        const result = detectAnomaly(event, currentBaseline);
+      if (bestBaseline && bestBaseline.count >= 10) {
+        const result = detectAnomaly(event, bestBaseline);
         if (result.tier === 2 && result.action === "anomaly") {
+          const isHourly = (hourlyBaseline && hourlyBaseline.count >= 5);
           const anomaly: Anomaly = {
             id: `${event.source}-${event.timestamp}-${crypto.randomUUID().slice(0, 8)}`,
             source: event.source,
             metric: event.metric,
-            expected: currentBaseline.mean,
+            expected: bestBaseline.mean,
             actual: event.value,
             z_score: result.z_score,
             severity: result.z_score >= 4 ? "critical" : result.z_score >= 3 ? "high" : result.z_score >= 2.5 ? "medium" : "low",
@@ -325,6 +354,57 @@ export class SentinelAgent extends DurableObject<Env> {
       anomaly.id, anomaly.source, anomaly.metric, anomaly.expected, anomaly.actual,
       anomaly.z_score, anomaly.severity, anomaly.narrative || null, anomaly.detected_at,
       anomaly.acknowledged ? 1 : 0
+    );
+  }
+
+  // --- Hourly Baseline (Time-of-Day Awareness) ---
+
+  private getHourlyBaseline(source: string, metric: string, hour: number): import("./types").BaselineEntry | null {
+    const row = this.ctx.storage.sql
+      .exec("SELECT * FROM hourly_baselines WHERE source = ? AND metric = ? AND hour = ?", source, metric, hour)
+      .toArray()[0];
+
+    if (!row) return null;
+
+    return {
+      source: row.source as string,
+      metric: row.metric as string,
+      mean: row.mean as number,
+      stddev: row.stddev as number,
+      count: row.count as number,
+      min: row.min_val as number,
+      max: row.max_val as number,
+      window_hours: 1,
+      updated_at: row.updated_at as number,
+    };
+  }
+
+  private upsertHourlyBaseline(source: string, metric: string, hour: number, value: number, timestamp: number): void {
+    const existing = this.getHourlyBaseline(source, metric, hour);
+
+    if (!existing) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO hourly_baselines (source, metric, hour, mean, stddev, count, min_val, max_val, updated_at)
+         VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)`,
+        source, metric, hour, value, value, value, timestamp
+      );
+      return;
+    }
+
+    // Welford's online update
+    const n = existing.count + 1;
+    const delta = value - existing.mean;
+    const newMean = existing.mean + delta / n;
+    const delta2 = value - newMean;
+    const oldVariance = existing.stddev * existing.stddev * (existing.count - 1 || 1);
+    const newVariance = oldVariance + delta * delta2;
+    const newStddev = n > 1 ? Math.sqrt(newVariance / (n - 1)) : 0;
+
+    this.ctx.storage.sql.exec(
+      `UPDATE hourly_baselines SET mean = ?, stddev = ?, count = ?, min_val = ?, max_val = ?, updated_at = ?
+       WHERE source = ? AND metric = ? AND hour = ?`,
+      newMean, newStddev, n, Math.min(existing.min, value), Math.max(existing.max, value), timestamp,
+      source, metric, hour
     );
   }
 
@@ -586,6 +666,21 @@ export class SentinelAgent extends DurableObject<Env> {
         const rows = this.ctx.storage.sql
           .exec("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT ?", limit)
           .toArray();
+        return Response.json(rows, { headers: corsHeaders });
+      }
+
+      // Hourly baselines — the daily rhythm
+      if (path === "/baselines/hourly") {
+        const metric = url.searchParams.get("metric") || "";
+        const source = url.searchParams.get("source") || "";
+        let query = "SELECT * FROM hourly_baselines";
+        const params: any[] = [];
+        if (source && metric) {
+          query += " WHERE source = ? AND metric = ?";
+          params.push(source, metric);
+        }
+        query += " ORDER BY source, metric, hour";
+        const rows = this.ctx.storage.sql.exec(query, ...params).toArray();
         return Response.json(rows, { headers: corsHeaders });
       }
 

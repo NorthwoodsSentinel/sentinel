@@ -14,6 +14,34 @@ const KNOWN_GOOD: Array<{ metric: string; pattern: RegExp; reason: string }> = [
   { metric: "outbound_connection", pattern: /\.(windowsupdate\.com|apple\.com\/updates|ubuntu\.com)$/, reason: "os_updates" },
   // CDN traffic
   { metric: "outbound_connection", pattern: /\.(cloudflare\.com|akamaized\.net|cloudfront\.net|fastly\.net)$/, reason: "cdn_traffic" },
+
+  // --- IoT Known-Good (common smart home chatter) ---
+  // Amazon Echo / Alexa
+  { metric: "dns_domain_queries", pattern: /\.amazon\.com$/, reason: "amazon_services" },
+  { metric: "dns_domain_queries", pattern: /\.amazonaws\.com$/, reason: "aws_services" },
+  { metric: "dns_domain_queries", pattern: /\.a2z\.com$/, reason: "amazon_devices" },
+  { metric: "dns_domain_queries", pattern: /alexa\.amazon/, reason: "alexa_service" },
+  // Apple devices
+  { metric: "dns_domain_queries", pattern: /\.(apple|icloud|mzstatic)\.com$/, reason: "apple_services" },
+  { metric: "dns_domain_queries", pattern: /\.push\.apple\.com$/, reason: "apple_push" },
+  // Google services
+  { metric: "dns_domain_queries", pattern: /\.google\.com$/, reason: "google_services" },
+  { metric: "dns_domain_queries", pattern: /\.googleapis\.com$/, reason: "google_apis" },
+  { metric: "dns_domain_queries", pattern: /\.gstatic\.com$/, reason: "google_static" },
+  // Microsoft / Teams
+  { metric: "dns_domain_queries", pattern: /\.(microsoft|office|teams|outlook|live)\.com$/, reason: "microsoft_services" },
+  { metric: "dns_domain_queries", pattern: /\.office\.net$/, reason: "office_cdn" },
+  // TP-Link smart plugs (Kasa/HS103)
+  { metric: "dns_domain_queries", pattern: /\.tplinkcloud\.com$/, reason: "tplink_smart_home" },
+  // Ring / Blink cameras
+  { metric: "dns_domain_queries", pattern: /\.ring\.com$/, reason: "ring_cameras" },
+  { metric: "dns_domain_queries", pattern: /\.immedia-semi\.com$/, reason: "blink_cameras" },
+  // UniFi self-management
+  { metric: "dns_domain_queries", pattern: /^unifi/, reason: "unifi_self" },
+  { metric: "dns_domain_queries", pattern: /\.ubnt\.com$/, reason: "ubiquiti_services" },
+  // Cloudflare (our own infrastructure)
+  { metric: "dns_domain_queries", pattern: /\.cloudflare\.com$/, reason: "cloudflare" },
+  { metric: "dns_domain_queries", pattern: /\.workers\.dev$/, reason: "cloudflare_workers" },
 ];
 
 // Known-bad patterns — immediate flags
