@@ -5,6 +5,7 @@
 // Each client gets their own DO instance — state is per-client, isolated.
 
 import type { Env } from "./types";
+import { renderDashboard } from "./dashboard";
 
 export { SentinelAgent } from "./agent";
 
@@ -13,13 +14,21 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Health check
-    if (path === "/" || path === "/health") {
+    // Health check (JSON)
+    if (path === "/health") {
       return Response.json({
         service: "sentinel",
         version: "0.1.0",
         status: "operational",
         description: "Edge-native network intelligence",
+      });
+    }
+
+    // Dashboard
+    if (path === "/" || path === "/dashboard") {
+      const clientId = url.searchParams.get("client") || "home";
+      return new Response(renderDashboard(clientId), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     }
 
