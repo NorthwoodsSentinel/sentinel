@@ -86,6 +86,40 @@ transform_and_send() {
   events=$(echo "$events" | jq --argjson ts "$now_ms" --argjson val "$wired_count" \
     '. + [{"source":"unifi","timestamp":$ts,"metric":"wired_clients","value":$val,"metadata":{"type":"gauge"}}]')
 
+  # Event 2b: Per-client device registration (sends identity data to Sentinel)
+  # Use python to handle JSON safely — jq for-loops break on names with spaces
+  local device_events=$(echo "$clients" | python3 -c "
+import sys, json, time
+data = json.load(sys.stdin)
+ts = int(time.time() * 1000)
+events = []
+for c in data.get('data', []):
+    mac = c.get('macAddress', '')
+    if mac:
+        events.append({
+            'source': 'unifi',
+            'timestamp': ts,
+            'metric': 'device_heartbeat',
+            'value': 1,
+            'metadata': {
+                'device_name': c.get('name', 'unnamed'),
+                'mac_address': mac,
+                'ip_address': c.get('ipAddress', ''),
+                'device_type': c.get('type', 'unknown')
+            }
+        })
+print(json.dumps(events))
+" 2>/dev/null)
+
+  if [[ -n "$device_events" && "$device_events" != "[]" ]]; then
+    events=$(python3 -c "
+import sys, json
+existing = json.loads(sys.argv[1])
+new = json.loads(sys.argv[2])
+print(json.dumps(existing + new))
+" "$events" "$device_events" 2>/dev/null)
+  fi
+
   # Event 3: Device stats (CPU, memory, uptime for each device)
   for device_id in $(echo "$devices" | jq -r '.data[].id'); do
     local stats=$(poll_device_stats "$device_id")

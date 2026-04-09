@@ -37,12 +37,9 @@ ZT_TOKEN=$(cat "$ZT_TOKEN_FILE" | tr -d '\n\r ')
 
 # --- Track last poll time ---
 get_from_time() {
-  if [[ -f "$LAST_POLL_FILE" ]]; then
-    cat "$LAST_POLL_FILE"
-  else
-    # First run — look back 5 minutes
-    date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ
-  fi
+  # Always look back 5 minutes — the GraphQL API aggregates data
+  # and short windows miss events that haven't been indexed yet
+  date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ
 }
 
 save_poll_time() {

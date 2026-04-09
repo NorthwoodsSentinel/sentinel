@@ -64,6 +64,47 @@ export class SentinelAgent extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS idx_anomalies_severity
       ON anomalies(severity, acknowledged)
     `);
+
+    // Device registry — maps MAC/IP to friendly names
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS devices (
+        mac_address TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        ip_address TEXT,
+        device_type TEXT,
+        vlan TEXT,
+        first_seen INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL
+      )
+    `);
+
+    // First-seen domain tracking — the "memory" of DNS history
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS known_domains (
+        domain TEXT PRIMARY KEY,
+        first_seen INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        total_queries INTEGER DEFAULT 1,
+        categories TEXT,
+        application TEXT
+      )
+    `);
+
+    this.ctx.storage.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_known_domains_first_seen
+      ON known_domains(first_seen DESC)
+    `);
+
+    // Alert log — track what notifications were sent
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS alerts (
+        id TEXT PRIMARY KEY,
+        anomaly_id TEXT,
+        channel TEXT NOT NULL,
+        sent_at INTEGER NOT NULL,
+        payload TEXT
+      )
+    `);
   }
 
   private async loadState(): Promise<void> {
@@ -169,6 +210,54 @@ export class SentinelAgent extends DurableObject<Env> {
       }
     }
 
+    // Track DNS domains (first-seen detection)
+    for (const event of batch.events) {
+      const domain = event.metadata?.domain;
+      if (domain && event.metric === "dns_domain_queries") {
+        const categories = event.metadata?.categories || "";
+        const application = event.metadata?.application || "";
+        const isNew = this.trackDomain(domain, categories, application);
+        if (isNew && this.state.baseline_ready) {
+          // New domain after baseline is established — noteworthy
+          const newDomainAnomaly: Anomaly = {
+            id: `first-seen-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+            source: "cloudflare-gateway",
+            metric: "first_seen_domain",
+            expected: 0,
+            actual: 1,
+            z_score: 0,
+            severity: "low",
+            narrative: `First-seen domain: ${domain}. This domain has never been queried by any device on this network before.${categories ? ` Categories: ${categories}.` : ""}${application ? ` Application: ${application}.` : ""}`,
+            detected_at: Date.now(),
+            acknowledged: false,
+          };
+          this.recordAnomalyLocal(newDomainAnomaly);
+          anomalyCount++;
+        }
+      }
+
+      // Track device info if present
+      if (event.metadata?.mac_address && event.metadata?.device_name) {
+        this.upsertDevice(
+          event.metadata.mac_address,
+          event.metadata.device_name,
+          event.metadata?.ip_address || "",
+          event.metadata?.device_type || "unknown",
+          event.metadata?.vlan || ""
+        );
+      }
+    }
+
+    // Send alerts for high/critical anomalies
+    if (anomalyCount > 0) {
+      const recent = this.getRecentAnomaliesLocal(5);
+      for (const a of recent) {
+        if ((a.severity === "high" || a.severity === "critical") && !a.acknowledged) {
+          this.ctx.waitUntil(this.sendAlert(a));
+        }
+      }
+    }
+
     // Store raw telemetry in R2 ("Dawn of Time")
     const r2Key = `telemetry/${batch.events[0]?.source || "unknown"}/${Date.now()}.json`;
     await this.env.TELEMETRY_R2.put(r2Key, JSON.stringify(batch));
@@ -237,6 +326,93 @@ export class SentinelAgent extends DurableObject<Env> {
       anomaly.z_score, anomaly.severity, anomaly.narrative || null, anomaly.detected_at,
       anomaly.acknowledged ? 1 : 0
     );
+  }
+
+  // --- Device Registry ---
+
+  private upsertDevice(mac: string, name: string, ip: string, deviceType: string, vlan: string): void {
+    const now = Date.now();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO devices (mac_address, name, ip_address, device_type, vlan, first_seen, last_seen)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (mac_address) DO UPDATE SET
+         name = excluded.name,
+         ip_address = excluded.ip_address,
+         last_seen = excluded.last_seen`,
+      mac, name, ip, deviceType, vlan, now, now
+    );
+  }
+
+  // --- First-Seen Domain Tracking ---
+
+  private trackDomain(domain: string, categories: string, application: string): boolean {
+    const now = Date.now();
+    const existing = this.ctx.storage.sql
+      .exec("SELECT domain FROM known_domains WHERE domain = ?", domain)
+      .toArray()[0];
+
+    if (existing) {
+      // Known domain — update last_seen and count
+      this.ctx.storage.sql.exec(
+        "UPDATE known_domains SET last_seen = ?, total_queries = total_queries + 1 WHERE domain = ?",
+        now, domain
+      );
+      return false; // not new
+    } else {
+      // NEW DOMAIN — never seen before
+      this.ctx.storage.sql.exec(
+        `INSERT INTO known_domains (domain, first_seen, last_seen, total_queries, categories, application)
+         VALUES (?, ?, ?, 1, ?, ?)`,
+        domain, now, now, categories, application
+      );
+      return true; // first time
+    }
+  }
+
+  private getRecentNewDomains(limit: number): Array<{ domain: string; first_seen: number; categories: string; application: string }> {
+    return this.ctx.storage.sql
+      .exec("SELECT domain, first_seen, categories, application FROM known_domains ORDER BY first_seen DESC LIMIT ?", limit)
+      .toArray()
+      .map(row => ({
+        domain: row.domain as string,
+        first_seen: row.first_seen as number,
+        categories: (row.categories as string) || "",
+        application: (row.application as string) || "",
+      }));
+  }
+
+  private getKnownDomainCount(): number {
+    const row = this.ctx.storage.sql.exec("SELECT COUNT(*) as cnt FROM known_domains").toArray()[0];
+    return (row?.cnt as number) || 0;
+  }
+
+  // --- Alerting ---
+
+  private async sendAlert(anomaly: Anomaly): Promise<void> {
+    const webhookUrl = await this.ctx.storage.get<string>("alert_webhook");
+    if (!webhookUrl) return;
+
+    const payload = {
+      content: `**[${(anomaly.severity || "unknown").toUpperCase()}] Sentinel Alert**\n` +
+        `**${anomaly.source}** : ${anomaly.metric}\n` +
+        `Expected: ${(anomaly.expected || 0).toFixed(1)} — Actual: ${anomaly.actual} — Z-score: ${(anomaly.z_score || 0).toFixed(1)}σ\n` +
+        (anomaly.narrative ? `\n${anomaly.narrative.slice(0, 500)}` : ""),
+    };
+
+    try {
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      this.ctx.storage.sql.exec(
+        "INSERT INTO alerts (id, anomaly_id, channel, sent_at, payload) VALUES (?, ?, ?, ?, ?)",
+        crypto.randomUUID(), anomaly.id, "webhook", Date.now(), JSON.stringify(payload)
+      );
+    } catch (err) {
+      console.error("Alert send failed:", err);
+    }
   }
 
   private getRecentAnomaliesLocal(limit: number): Anomaly[] {
@@ -359,6 +535,76 @@ export class SentinelAgent extends DurableObject<Env> {
         // Update the stored anomaly with the narrative
         this.ctx.storage.sql.exec("UPDATE anomalies SET narrative = ? WHERE id = ?", narrative, anomaly_id);
         return Response.json({ anomaly_id, narrative }, { headers: corsHeaders });
+      }
+
+      // Devices registry
+      if (path === "/devices") {
+        const rows = this.ctx.storage.sql
+          .exec("SELECT * FROM devices ORDER BY last_seen DESC")
+          .toArray();
+        return Response.json(rows, { headers: corsHeaders });
+      }
+
+      // Known domains — the network's DNS memory
+      if (path === "/domains") {
+        const limit = parseInt(url.searchParams.get("limit") || "50");
+        const sort = url.searchParams.get("sort") || "recent"; // recent or frequent
+        const query = sort === "frequent"
+          ? "SELECT * FROM known_domains ORDER BY total_queries DESC LIMIT ?"
+          : "SELECT * FROM known_domains ORDER BY first_seen DESC LIMIT ?";
+        const rows = this.ctx.storage.sql.exec(query, limit).toArray();
+        const total = this.getKnownDomainCount();
+        return Response.json({ total_known_domains: total, domains: rows }, { headers: corsHeaders });
+      }
+
+      // New domains — only domains first seen in the last N hours
+      if (path === "/domains/new") {
+        const hours = parseInt(url.searchParams.get("hours") || "24");
+        const since = Date.now() - (hours * 60 * 60 * 1000);
+        const rows = this.ctx.storage.sql
+          .exec("SELECT * FROM known_domains WHERE first_seen > ? ORDER BY first_seen DESC", since)
+          .toArray();
+        return Response.json({ hours, new_domains: rows.length, domains: rows }, { headers: corsHeaders });
+      }
+
+      // Configure alert webhook
+      if (path === "/alerts/webhook" && request.method === "POST") {
+        const { url: webhookUrl } = await request.json() as { url: string };
+        await this.ctx.storage.put("alert_webhook", webhookUrl);
+        return Response.json({ configured: true, url: webhookUrl }, { headers: corsHeaders });
+      }
+
+      // Get alert webhook config
+      if (path === "/alerts/webhook") {
+        const webhookUrl = await this.ctx.storage.get<string>("alert_webhook");
+        return Response.json({ configured: !!webhookUrl, url: webhookUrl || null }, { headers: corsHeaders });
+      }
+
+      // Alert history
+      if (path === "/alerts") {
+        const limit = parseInt(url.searchParams.get("limit") || "20");
+        const rows = this.ctx.storage.sql
+          .exec("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT ?", limit)
+          .toArray();
+        return Response.json(rows, { headers: corsHeaders });
+      }
+
+      // Enhanced status with domain stats
+      if (path === "/status/full") {
+        const status = await this.getStatus();
+        const domainCount = this.getKnownDomainCount();
+        const deviceCount = this.ctx.storage.sql
+          .exec("SELECT COUNT(*) as cnt FROM devices").toArray()[0];
+        const recentNewDomains = this.ctx.storage.sql
+          .exec("SELECT COUNT(*) as cnt FROM known_domains WHERE first_seen > ?", Date.now() - 86400000)
+          .toArray()[0];
+
+        return Response.json({
+          ...status,
+          known_domains: domainCount,
+          tracked_devices: (deviceCount?.cnt as number) || 0,
+          new_domains_24h: (recentNewDomains?.cnt as number) || 0,
+        }, { headers: corsHeaders });
       }
 
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });

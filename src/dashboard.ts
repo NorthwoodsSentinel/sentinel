@@ -187,14 +187,28 @@ export function renderDashboard(clientId: string): string {
   <div class="grid" id="stats">
     <div class="stat-card"><div class="label">Events Ingested</div><div class="value" id="total-events">--</div><div class="sub">since deployment</div></div>
     <div class="stat-card"><div class="label">Anomalies Detected</div><div class="value yellow" id="total-anomalies">--</div><div class="sub">all time</div></div>
-    <div class="stat-card"><div class="label">Baseline Status</div><div class="value green" id="baseline-status">--</div><div class="sub" id="baseline-sub"></div></div>
-    <div class="stat-card"><div class="label">Last Ingestion</div><div class="value" id="last-ingestion" style="font-size:18px">--</div><div class="sub">ago</div></div>
+    <div class="stat-card"><div class="label">Known Domains</div><div class="value green" id="known-domains">--</div><div class="sub" id="new-domains-24h">loading...</div></div>
+    <div class="stat-card"><div class="label">Tracked Devices</div><div class="value" id="tracked-devices">--</div><div class="sub" id="baseline-sub">baseline learning</div></div>
   </div>
 
   <div class="section">
     <h2>Recent Anomalies</h2>
     <div class="anomaly-list" id="anomalies">
       <div class="anomaly"><div class="metric">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>New Domains (Last 24h)</h2>
+    <div class="baseline-grid" id="new-domains">
+      <div class="baseline-card"><div class="metric-name">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Connected Devices</h2>
+    <div class="baseline-grid" id="devices">
+      <div class="baseline-card"><div class="metric-name">Loading...</div></div>
     </div>
   </div>
 
@@ -230,22 +244,27 @@ export function renderDashboard(clientId: string): string {
 
     async function refresh() {
       try {
-        const [statusRes, anomaliesRes, baselinesRes] = await Promise.all([
-          fetch(BASE + '/status?client=' + CLIENT),
+        const [statusRes, anomaliesRes, baselinesRes, domainsRes, devicesRes] = await Promise.all([
+          fetch(BASE + '/status/full?client=' + CLIENT),
           fetch(BASE + '/anomalies?client=' + CLIENT + '&limit=15'),
-          fetch(BASE + '/baselines?client=' + CLIENT)
+          fetch(BASE + '/baselines?client=' + CLIENT),
+          fetch(BASE + '/domains/new?client=' + CLIENT + '&hours=24'),
+          fetch(BASE + '/devices?client=' + CLIENT)
         ]);
 
         const status = await statusRes.json();
         const anomalies = await anomaliesRes.json();
         const baselines = await baselinesRes.json();
+        const domainsData = await domainsRes.json();
+        const devices = await devicesRes.json();
 
         // Stats
         document.getElementById('total-events').textContent = status.total_events_ingested.toLocaleString();
         document.getElementById('total-anomalies').textContent = status.total_anomalies_detected;
-        document.getElementById('baseline-status').textContent = status.baseline_ready ? 'READY' : 'LEARNING';
-        document.getElementById('baseline-sub').textContent = status.baseline_ready ? 'Anomaly detection active' : 'Collecting baseline data...';
-        document.getElementById('last-ingestion').textContent = status.last_ingestion ? timeAgo(status.last_ingestion) : 'never';
+        document.getElementById('known-domains').textContent = (status.known_domains || 0).toLocaleString();
+        document.getElementById('new-domains-24h').textContent = (status.new_domains_24h || 0) + ' new in last 24h';
+        document.getElementById('tracked-devices').textContent = (status.tracked_devices || 0);
+        document.getElementById('baseline-sub').textContent = status.baseline_ready ? 'Anomaly detection active' : 'Collecting baseline...';
         document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
 
         if (status.total_anomalies_detected > 10) {
@@ -264,6 +283,28 @@ export function renderDashboard(clientId: string): string {
             '</div>';
         }).join('');
         document.getElementById('anomalies').innerHTML = anomalyHtml || '<div class="anomaly"><div class="metric">No anomalies detected yet</div></div>';
+
+        // New Domains
+        const newDomainHtml = (domainsData.domains || []).map(d => {
+          return '<div class="baseline-card">' +
+            '<div class="metric-name">' + escapeHtml(d.domain) + '</div>' +
+            '<div class="stats-row">First seen: <span>' + timeAgo(d.first_seen) + '</span></div>' +
+            (d.categories ? '<div class="stats-row">Categories: <span>' + escapeHtml(d.categories) + '</span></div>' : '') +
+            (d.application ? '<div class="stats-row">App: <span>' + escapeHtml(d.application) + '</span></div>' : '') +
+            '</div>';
+        }).join('');
+        document.getElementById('new-domains').innerHTML = newDomainHtml || '<div class="baseline-card"><div class="metric-name">No new domains in last 24h</div></div>';
+
+        // Devices
+        const deviceHtml = (Array.isArray(devices) ? devices : []).map(d => {
+          return '<div class="baseline-card">' +
+            '<div class="metric-name">' + escapeHtml(d.name || 'unnamed') + '</div>' +
+            '<div class="stats-row">IP: <span>' + escapeHtml(d.ip_address || '?') + '</span></div>' +
+            '<div class="stats-row">Type: <span>' + escapeHtml(d.device_type || '?') + '</span></div>' +
+            '<div class="stats-row">Last seen: <span>' + timeAgo(d.last_seen) + '</span></div>' +
+            '</div>';
+        }).join('');
+        document.getElementById('devices').innerHTML = deviceHtml || '<div class="baseline-card"><div class="metric-name">No devices tracked yet</div></div>';
 
         // Baselines
         const baselineHtml = baselines.map(b => {
