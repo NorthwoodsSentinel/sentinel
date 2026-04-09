@@ -24,7 +24,7 @@ export default {
     }
 
     // Route to the correct Sentinel agent instance
-    // Default to "home" for Rob's home network prototype
+    // Default client ID — each client gets their own isolated DO instance
     const clientId = url.searchParams.get("client") || "home";
     const agentId = env.SENTINEL_AGENT.idFromName(clientId);
     const agent = env.SENTINEL_AGENT.get(agentId);

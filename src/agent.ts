@@ -1,6 +1,6 @@
 // SentinelAgent — The forensic reasoning brain
 // Durable Object with SQLite state, WebSocket support, alarm scheduling.
-// This is Rob's 20 years of forensic methodology encoded as edge compute.
+// Forensic methodology encoded as edge compute.
 
 import { DurableObject } from "cloudflare:workers";
 import type { Env, TelemetryEvent, TelemetryBatch, Anomaly, SentinelState, IngestResponse } from "./types";

@@ -19,11 +19,16 @@ binding = "TELEMETRY_R2"
 bucket_name = "sentinel-telemetry"
 
 # D1 — Baseline state and anomaly index
+# Create with: wrangler d1 create sentinel-baselines
+# Then paste the database_id below
 [[d1_databases]]
 binding = "BASELINE_D1"
 database_name = "sentinel-baselines"
-database_id = "34ff387c-f115-44c1-8788-ecfae235a925"
+database_id = ""  # YOUR_D1_DATABASE_ID
 
-# Environment variables (secrets set via wrangler secret put)
+# Secrets (set via wrangler secret put, never in this file):
+#   ANTHROPIC_API_KEY — for Tier 3 narrative generation
+
+# Environment variables
 [vars]
 ENVIRONMENT = "development"
