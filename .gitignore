@@ -3,4 +3,6 @@ dist/
 .wrangler/
 .dev.vars
 .env
+poller/.env
+!poller/.env.example
 *.log

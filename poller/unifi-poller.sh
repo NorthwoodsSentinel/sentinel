@@ -14,12 +14,15 @@
 
 set -euo pipefail
 
-# --- Config ---
-UNIFI_HOST="https://YOUR_UDM_IP"
-UNIFI_SITE="YOUR_UNIFI_SITE_UUID"
-SENTINEL_URL="https://your-sentinel.workers.dev"
-SENTINEL_CLIENT="home"
-KEY_FILE="$HOME/.claude/.secrets/unifi_api_key"
+# --- Config (override via environment or .env file) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[[ -f "$SCRIPT_DIR/.env" ]] && source "$SCRIPT_DIR/.env"
+
+UNIFI_HOST="${UNIFI_HOST:?Set UNIFI_HOST in .env or environment}"
+UNIFI_SITE="${UNIFI_SITE:?Set UNIFI_SITE in .env or environment}"
+SENTINEL_URL="${SENTINEL_URL:?Set SENTINEL_URL in .env or environment}"
+SENTINEL_CLIENT="${SENTINEL_CLIENT:-home}"
+KEY_FILE="${UNIFI_KEY_FILE:-$HOME/.secrets/unifi_api_key}"
 INTERVAL=60
 
 # --- Args ---

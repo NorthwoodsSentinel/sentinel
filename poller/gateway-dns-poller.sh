@@ -10,11 +10,14 @@
 
 set -euo pipefail
 
-# --- Config ---
-CF_ACCOUNT="YOUR_CLOUDFLARE_ACCOUNT_ID"
-ZT_TOKEN_FILE="$HOME/.claude/.secrets/cf_zt_token"
-SENTINEL_URL="https://your-sentinel.workers.dev"
-SENTINEL_CLIENT="home"
+# --- Config (override via environment or .env file) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[[ -f "$SCRIPT_DIR/.env" ]] && source "$SCRIPT_DIR/.env"
+
+CF_ACCOUNT="${CF_ACCOUNT:?Set CF_ACCOUNT in .env or environment}"
+ZT_TOKEN_FILE="${ZT_TOKEN_FILE:-$HOME/.secrets/cf_zt_token}"
+SENTINEL_URL="${SENTINEL_URL:?Set SENTINEL_URL in .env or environment}"
+SENTINEL_CLIENT="${SENTINEL_CLIENT:-home}"
 INTERVAL=60
 LAST_POLL_FILE="/tmp/.sentinel-dns-last-poll"
 

@@ -1,8 +1,19 @@
 # Sentinel
 
-**Edge-native network intelligence — AI that knows how a network lives.**
+**Edge-native network intelligence.**
+An open framework for understanding how your network actually behaves.
 
-Built entirely on Cloudflare Workers, Durable Objects, R2, and D1. No boxes. No agents to install. No log shipping. The intelligence lives where the traffic lives — at the edge.
+## What Sentinel Does
+
+Sentinel observes your network over time and builds a behavioral baseline.
+
+Instead of asking: *"Is this known to be malicious?"*
+
+It asks: **"Is this normal for this network?"**
+
+When something deviates, it flags it. That's it.
+
+No signatures. No threat feeds. No assumptions about what "bad" looks like.
 
 ## The Problem: The Small Pot
 
@@ -20,54 +31,57 @@ Three generations of wasted ham because nobody questioned a constraint that no l
 
 For 30 years, we've been cutting the ends off the data. Ship your logs to someone else's cloud. Pay per GB for ingestion. Wait for a dashboard to tell you about the threat they've already cataloged. Normal traffic — the 99% that defines what your network actually looks like — gets discarded. The pot was too small.
 
-The pot isn't small anymore. Cloudflare R2 has zero egress costs. Durable Objects give you persistent state at the edge. The kitchen is the entire global network. But the industry keeps cutting the ends off the ham — because that's how it's always been done.
+The pot isn't small anymore. Cloudflare R2 has zero egress costs. Durable Objects give you persistent state at the edge. But the industry keeps cutting the ends off the ham — because that's how it's always been done.
 
 Meanwhile, AI-generated attacks are novel by default. Signature-based detection is collapsing. The only durable defense is *knowing your own network so well that anomalies are obvious*.
 
-## The Architecture
+## How It Works
 
-Sentinel deploys a persistent AI analyst directly onto Cloudflare's edge. Each client gets an isolated Durable Object that builds a living baseline from every packet, flow, and DNS query. It doesn't alert on known-bad. It detects **not-normal**.
+Telemetry flows through a three-tier reasoning pipeline:
 
 ```
-Telemetry Sources          Cloudflare Edge              Output
+Telemetry Sources          Edge Processing              Output
 ─────────────────          ───────────────              ──────
 Firewall Logs       ─┐
-                     ├──→  Worker (Ingestion)
-Network Controller  ─┤         │
-                     │    Tier 1: Regex Filter ──── known-good (discard)
-DNS / Flow Data     ─┘    (sub-millisecond)     └── known-bad (immediate alert)
+                     ├──→  Tier 1: Regex Filter ──── known-good (discard)
+Network Controller  ─┤         │                 └── known-bad (alert)
+                     │
+DNS / Flow Data     ─┘    Tier 2: Statistical ──── normal (update baseline)
+                          Anomaly Detection    └── anomaly (z-score)
                                │
-                          Tier 2: Statistical ──── normal (update baseline)
-                          Anomaly Detection    └── anomaly (z-score > 2.5σ)
-                          (Welford's algorithm)
-                               │
-                          Tier 3: LLM Narrative
-                          (Claude, anomalies only)
+                          Tier 3: Narrative
+                          (LLM, anomalies only)
                                │
                      ┌─────────┴──────────┐
                 Durable Object          R2 Bucket
                 (baseline state,        (telemetry archive,
                  anomaly history,        "Dawn of Time"
                  SQLite)                 storage)
-                     │
-                REST API / Dashboard / Voice
 ```
 
-### Three-Tier Reasoning
+### Tier 1 — Deterministic Filtering
 
-The cost-efficiency solve. Not everything needs an LLM.
+Known-good patterns are discarded immediately. Known-bad patterns trigger instant alerts. Sub-millisecond execution.
+
+### Tier 2 — Behavioral Baseline
+
+Online statistical model using Welford's algorithm — running mean and variance with O(1) memory per metric. Hourly baselines provide time-aware behavior detection ("31 clients at 3 PM is normal; 31 clients at 3 AM is not"). Falls back to global baseline until hourly profiles have sufficient observations. Flags deviations using z-score thresholds.
+
+### Tier 3 — Narrative Context (Optional)
+
+Only triggered for anomalies. Converts signal into human-readable forensic narrative. Helps answer: *"Why does this matter?"*
 
 | Tier | Method | Cost | Latency | Purpose |
 |------|--------|------|---------|---------|
 | 1 | Regex/pattern matching | $0 | <1ms | Filter known-good and known-bad instantly |
-| 2 | Statistical anomaly detection | $0 | ~1ms | Welford's online algorithm — running mean/variance with O(1) memory |
-| 3 | LLM forensic narrative | ~$0.003/anomaly | ~3s | Claude generates human-readable incident narrative |
+| 2 | Statistical anomaly detection | $0 | ~1ms | Online baseline with constant memory |
+| 3 | LLM forensic narrative | ~$0.003/anomaly | ~3s | Human-readable incident context |
 
 Only Tier 2 anomalies reach the LLM. Tier 1 filters the noise. Tier 2 finds the signal. Tier 3 tells the story.
 
-### Sample Tier 3 Narrative
+Tier 3 is optional. Tier 1 + Tier 2 are a complete system on their own.
 
-When Sentinel detects a statistical anomaly, it generates a forensic narrative like this:
+### Sample Tier 3 Narrative
 
 > **What Happened:** Your network controller sent 50,000 bytes outbound — roughly 10x its normal traffic volume of 4,870 bytes. This is the largest value in the entire baseline.
 >
@@ -81,6 +95,67 @@ When Sentinel detects a statistical anomaly, it generates a forensic narrative l
 > **Verdict:** Investigate before escalating. Likely benign, not confirmed benign.
 
 Not an alert. A story. With context, caveats, and actionable next steps.
+
+## Quick Start
+
+```bash
+# Clone
+git clone https://github.com/NorthwoodsSentinel/sentinel.git
+cd sentinel
+
+# Install dependencies
+npm install
+
+# Create Cloudflare resources
+wrangler r2 bucket create sentinel-telemetry
+wrangler d1 create sentinel-baselines
+# Copy the database_id into wrangler.toml
+
+# Set your Anthropic API key (for Tier 3 narratives)
+wrangler secret put ANTHROPIC_API_KEY
+
+# Deploy
+wrangler deploy
+
+# Test
+curl https://your-worker.workers.dev/health
+```
+
+### Configure Pollers
+
+```bash
+cd poller
+cp .env.example .env
+# Edit .env with your Cloudflare account ID, UniFi host, Sentinel URL, etc.
+
+# Start a poller
+./gateway-dns-poller.sh          # run once
+./gateway-dns-poller.sh --loop   # poll every 60s
+```
+
+## Architecture
+
+Sentinel runs entirely at the edge. Each deployment is isolated. Your data stays in your environment.
+
+| Primitive | Role |
+|-----------|------|
+| **Workers** | HTTP ingestion endpoint, request routing |
+| **Durable Objects** | Per-client stateful agent with embedded SQLite — baselines, anomaly history, agent state |
+| **R2** | Zero-egress telemetry archive — keep everything, forever |
+| **D1** | Indexed metadata and cross-client queries |
+| **Secrets** | API keys for Tier 3 narrative generation |
+
+### Key Design Principles
+
+**Local-first.** All processing happens inside your own infrastructure. No centralized data collection. No external pipelines.
+
+**Behavioral, not signature-based.** Sentinel doesn't rely on known attack patterns. It learns what your network looks like and flags deviations.
+
+**Continuous memory.** The system builds history over time. The longer it runs, the more context it has. First-seen domain detection means every DNS domain ever queried is tracked — any never-before-seen domain triggers a low-severity anomaly. The network's memory.
+
+**Cost-aware.** Tier 1 and Tier 2: effectively zero cost. Tier 3: invoked only on anomalies. Typical deployments run for pennies per day.
+
+**Time-aware.** Separate statistical profiles per hour of day. "Normal at 3 PM" is different from "normal at 3 AM."
 
 ## API
 
@@ -110,45 +185,58 @@ POST /narrative?client={id}           Generate narrative for a specific anomaly
 }
 ```
 
-## Cloudflare Primitives Used
+## What's Open. What's Not.
 
-| Primitive | Role |
-|-----------|------|
-| **Workers** | HTTP ingestion endpoint, request routing |
-| **Durable Objects** | Per-client stateful agent with embedded SQLite — baselines, anomaly history, agent state |
-| **R2** | Zero-egress telemetry archive — keep everything, forever |
-| **D1** | Indexed metadata and cross-client queries |
-| **Secrets** | Anthropic API key for Tier 3 narrative generation |
+Sentinel is open source by design.
 
-### Why Cloudflare
+You can deploy it, inspect it, modify it, and run it entirely on your own infrastructure. There are no hidden components.
 
-- **Data sovereignty by architecture.** Each client's data lives in their own DO + R2. Nothing is commingled.
-- **Zero egress cost on R2.** The "Dawn of Time" corpus — storing years of telemetry — is economically viable because you don't pay to read it.
-- **Durable Object SQLite.** Welford's algorithm needs persistent state that survives restarts. DO SQLite gives sub-millisecond reads with 10GB storage per object.
-- **WebSocket hibernation.** Agents stay connected to dashboards without billing for idle time. This makes always-on monitoring economically viable.
-- **Global edge deployment.** The analyst runs in 300+ cities. Latency to the nearest ingestion point is negligible.
+But there is a difference between running the system and understanding what it sees.
 
-## Deploy Your Own
+Sentinel shows you what is not normal. It does not assume what that means for your environment.
 
-```bash
-# Clone
-git clone https://github.com/NorthwoodsSentinel/sentinel.git
-cd sentinel
+Interpreting that signal — deciding what matters, what can be ignored, and what requires action — is not something code can fully automate.
 
-# Create Cloudflare resources
-wrangler r2 bucket create sentinel-telemetry
-wrangler d1 create sentinel-baselines
-# Copy the database_id into wrangler.toml
+You can use Sentinel independently. But the depth of insight depends on how well you can read the patterns it surfaces.
 
-# Set your Anthropic API key (for Tier 3 narratives)
-wrangler secret put ANTHROPIC_API_KEY
+That is the boundary:
 
-# Deploy
-wrangler deploy
+- The framework is open
+- The data is yours
+- The meaning requires context
 
-# Test
-curl https://your-worker.workers.dev/health
-```
+## What Sentinel Is Not
+
+- Not a SIEM
+- Not a replacement for IDS/IPS
+- Not a threat intelligence platform
+
+It is a baseline engine.
+
+## Known Limitations
+
+- Assumes quasi-normal distributions (z-score based detection)
+- Early baselines may be incomplete (low sample size)
+- Behavioral models can be influenced by sustained changes in traffic
+- Interpretation of anomalies is left to the operator
+- Adversarial actors may attempt to slowly train the baseline — acknowledge this as an inherent property of statistical models
+
+## Security Notes
+
+- All credentials must be provided via environment variables or secret files
+- No secrets are stored in the repository
+- Raw telemetry may contain sensitive data — manage retention accordingly
+- Dashboard is reference-grade and should not be exposed to the internet without additional access controls (Cloudflare Access recommended)
+
+## Data Retention
+
+Sentinel can store raw telemetry indefinitely via R2. You are responsible for:
+
+- Retention policies appropriate to your environment
+- Compliance requirements (GDPR, HIPAA, etc.)
+- Lifecycle management and deletion
+
+Apply lifecycle rules to your R2 bucket where appropriate.
 
 ## The Thesis
 
@@ -156,18 +244,26 @@ curl https://your-worker.workers.dev/health
 
 If AI makes exploitation cheap, it makes proactive defense cheap too. The attacker uses AI to find vulnerabilities. The defender uses the *same AI* to baseline normal behavior so aggressively that the AI-generated exploit looks "not-normal" — even without a signature.
 
-**Known-bad detection is a small pot.** Sentinel is the whole kitchen.
+Known-bad detection is a small pot. Sentinel is the whole kitchen.
 
 ## Roadmap
 
 - [ ] Zero Trust auth wrapper (Cloudflare Access)
-- [ ] Real telemetry pollers (UniFi API, Palo Alto syslog, Cloudflare Logpush)
+- [ ] Additional pollers (Palo Alto syslog, Cloudflare Logpush)
 - [ ] Vectorize integration for RAG over historical telemetry
 - [ ] Cold start industry baselines (healthcare, education, financial)
-- [ ] Dashboard UI (React + AI Gateway analytics)
-- [ ] RealtimeKit voice interface — talk to your Sentinel from your phone
+- [ ] Dashboard UI improvements
 - [ ] Workers for Platforms — multi-tenant deployment template
 - [ ] Agentic defense — AI generates defensive signatures proactively
+
+## Contributing
+
+Contributions are welcome. Focus areas:
+
+- Additional telemetry sources and pollers
+- Improved statistical models
+- Dashboard enhancements
+- Performance optimization
 
 ## Background
 
@@ -178,3 +274,7 @@ Built by [Northwoods Sentinel Labs](https://northwoodssentinel.com).
 ## License
 
 MIT
+
+---
+
+Sentinel is easy to run. It is not easy to ignore.
