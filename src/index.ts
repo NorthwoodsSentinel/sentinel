@@ -24,6 +24,30 @@ export default {
       });
     }
 
+    // Blog preview
+    if (path === "/blog") {
+      const blogHtml = await import("./blog").then(m => m.blogHtml);
+      return new Response(blogHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    // Journey
+    if (path === "/journey") {
+      const journeyHtml = await import("./journey").then(m => m.journeyHtml);
+      return new Response(journeyHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    // Substack preview
+    if (path === "/substack") {
+      const substackHtml = await import("./substack").then(m => m.substackHtml);
+      return new Response(substackHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
     // Dashboard
     if (path === "/" || path === "/dashboard") {
       const clientId = url.searchParams.get("client") || "home";

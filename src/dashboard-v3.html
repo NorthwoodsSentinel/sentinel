@@ -1,8 +1,4 @@
-// Sentinel Dashboard v3
-// "I'll make some sense out of the world" — Gord Downie
-
-export function renderDashboard(clientId: string): string {
-  return `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -687,7 +683,7 @@ async function fetchData(endpoint) {
   if (!CONFIG.API_BASE) return null;
   try {
     const sep = endpoint.includes('?') ? '&' : '?';
-    const url = \`\${CONFIG.API_BASE}\${endpoint}\${sep}client=\${CONFIG.CLIENT}\`;
+    const url = `${CONFIG.API_BASE}${endpoint}${sep}client=${CONFIG.CLIENT}`;
     const opts = { credentials: 'same-origin' };
     if (CONFIG.HEADERS && Object.values(CONFIG.HEADERS).some(v => v)) {
       opts.headers = CONFIG.HEADERS;
@@ -704,8 +700,8 @@ async function fetchData(endpoint) {
 
 function formatNumber(n) {
   if (n == null) return '--';
-  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
-  if (n >= 10000) return (n / 1000).toFixed(1).replace(/\\.0$/, '') + 'K';
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 10000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
   return n.toLocaleString();
 }
 
@@ -718,11 +714,11 @@ function timeAgo(iso) {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
-  if (mins < 60) return \`\${mins}m ago\`;
+  if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return \`\${hrs}h ago\`;
+  if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
-  return \`\${days}d ago\`;
+  return `${days}d ago`;
 }
 
 function hourLabel(i) {
@@ -905,7 +901,7 @@ function renderPulseChart(actual, upper, lower) {
               const idx = item.dataIndex;
               const val = actual[idx];
               const isAnomaly = val > upper[idx];
-              return \`\${val} queries\${isAnomaly ? ' (anomalous)' : ''}\`;
+              return `${val} queries${isAnomaly ? ' (anomalous)' : ''}`;
             }
           }
         }
@@ -956,21 +952,21 @@ function renderAnomalies(anomalies) {
 
   container.innerHTML = anomalies.map(a => {
     const severityClass = a.z_score >= 5 ? 'high' : a.z_score >= 3 ? 'medium' : a.z_score >= 2 ? 'low' : 'info';
-    return \`
+    return `
       <div class="anomaly-item">
-        <div class="anomaly-accent \${severityClass}"></div>
+        <div class="anomaly-accent ${severityClass}"></div>
         <div class="anomaly-body">
-          <div class="anomaly-heading">\${escapeHtml(a.source)} &middot; \${escapeHtml(a.metric.replace(/_/g, ' '))}</div>
+          <div class="anomaly-heading">${escapeHtml(a.source)} &middot; ${escapeHtml(a.metric.replace(/_/g, ' '))}</div>
           <div class="anomaly-metrics">
-            <span>Expected <strong>\${typeof a.expected === 'number' ? a.expected.toFixed(1) : a.expected}</strong></span>
-            <span>Actual <strong>\${typeof a.actual === 'number' ? a.actual.toLocaleString() : a.actual}</strong></span>
-            <span>Z-score <strong>\${a.z_score.toFixed(2)}</strong></span>
+            <span>Expected <strong>${typeof a.expected === 'number' ? a.expected.toFixed(1) : a.expected}</strong></span>
+            <span>Actual <strong>${typeof a.actual === 'number' ? a.actual.toLocaleString() : a.actual}</strong></span>
+            <span>Z-score <strong>${a.z_score.toFixed(2)}</strong></span>
           </div>
-          \${a.narrative ? \`<div class="anomaly-narrative">\${escapeHtml(a.narrative)}</div>\` : ''}
+          ${a.narrative ? `<div class="anomaly-narrative">${escapeHtml(a.narrative)}</div>` : ''}
         </div>
-        <div class="anomaly-time">\${timeAgo(a.detected_at)}</div>
+        <div class="anomaly-time">${timeAgo(a.detected_at)}</div>
       </div>
-    \`;
+    `;
   }).join('');
 }
 
@@ -999,22 +995,22 @@ function renderDevices(devices) {
 
   container.innerHTML = sortedTypes.map(type => {
     const devs = groups[type].sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen));
-    return \`
+    return `
       <div class="device-group">
         <div class="device-group-header">
-          <span>\${escapeHtml(type)}</span>
-          <span class="device-group-count">\${devs.length}</span>
+          <span>${escapeHtml(type)}</span>
+          <span class="device-group-count">${devs.length}</span>
         </div>
-        \${devs.map(d => \`
+        ${devs.map(d => `
           <div class="device-row">
-            <span class="device-name">\${escapeHtml(d.name)}</span>
-            <span>\${d.ip_address || '&mdash;'}</span>
-            <span>\${d.vlan || '&mdash;'}</span>
-            <span>\${timeAgo(d.last_seen)}</span>
+            <span class="device-name">${escapeHtml(d.name)}</span>
+            <span>${d.ip_address || '&mdash;'}</span>
+            <span>${d.vlan || '&mdash;'}</span>
+            <span>${timeAgo(d.last_seen)}</span>
           </div>
-        \`).join('')}
+        `).join('')}
       </div>
-    \`;
+    `;
   }).join('');
 }
 
@@ -1027,7 +1023,7 @@ function renderDomains(data) {
 
   const highThreshold = 40; // queries above this get highlighted
 
-  container.innerHTML = \`
+  container.innerHTML = `
     <table class="domains-table">
       <thead>
         <tr>
@@ -1038,22 +1034,22 @@ function renderDomains(data) {
         </tr>
       </thead>
       <tbody>
-        \${data.domains.map(d => \`
-          <tr class="\${d.total_queries >= highThreshold ? 'high-queries' : ''}">
-            <td>\${escapeHtml(d.domain)}</td>
-            <td>\${timeAgo(d.first_seen)}</td>
-            <td class="query-count">\${d.total_queries.toLocaleString()}</td>
-            <td>\${escapeHtml(d.application || '&mdash;')}</td>
+        ${data.domains.map(d => `
+          <tr class="${d.total_queries >= highThreshold ? 'high-queries' : ''}">
+            <td>${escapeHtml(d.domain)}</td>
+            <td>${timeAgo(d.first_seen)}</td>
+            <td class="query-count">${d.total_queries.toLocaleString()}</td>
+            <td>${escapeHtml(d.application || '&mdash;')}</td>
           </tr>
-        \`).join('')}
+        `).join('')}
       </tbody>
     </table>
-    \${data.new_domains > data.domains.length ? \`
+    ${data.new_domains > data.domains.length ? `
       <p style="color:var(--text-tertiary);font-size:0.8125rem;margin-top:12px;">
-        Showing \${data.domains.length} of \${data.new_domains.toLocaleString()} new domains
+        Showing ${data.domains.length} of ${data.new_domains.toLocaleString()} new domains
       </p>
-    \` : ''}
-  \`;
+    ` : ''}
+  `;
 }
 
 function escapeHtml(str) {
@@ -1065,7 +1061,7 @@ function escapeHtml(str) {
 
 function updateTimestamp() {
   const el = document.getElementById('lastUpdated');
-  el.textContent = \`Last updated \${new Date().toLocaleTimeString()}\`;
+  el.textContent = `Last updated ${new Date().toLocaleTimeString()}`;
 }
 
 // ---------- MAIN ----------
@@ -1178,5 +1174,3 @@ setInterval(loadDashboard, CONFIG.REFRESH_INTERVAL);
 </script>
 </body>
 </html>
-`;
-}
