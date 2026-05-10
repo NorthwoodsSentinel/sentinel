@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+[observability]
+enabled = true
+
 # Durable Objects — the Sentinel Agent brain
 [durable_objects]
 bindings = [
@@ -19,16 +22,17 @@ binding = "TELEMETRY_R2"
 bucket_name = "sentinel-telemetry"
 
 # D1 — Baseline state and anomaly index
-# Create with: wrangler d1 create sentinel-baselines
-# Then paste the database_id below
+# (NOTE: hardcoded id below should move to a wrangler.toml.template pattern
+#  per the loam convention — gitignore the real config + commit only the
+#  template. Tracked separately.)
 [[d1_databases]]
 binding = "BASELINE_D1"
 database_name = "sentinel-baselines"
-database_id = ""  # YOUR_D1_DATABASE_ID
+database_id = "34ff387c-f115-44c1-8788-ecfae235a925"
 
 # Secrets (set via wrangler secret put, never in this file):
 #   ANTHROPIC_API_KEY — for Tier 3 narrative generation
 
 # Environment variables
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
