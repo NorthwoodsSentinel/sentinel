@@ -38,15 +38,30 @@ export class SentinelAgent extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    // Daily compaction: decay baselines, purge old anomalies, clean stale domains
-    const stats = runCompaction(this.ctx.storage.sql);
-    console.log(`Compaction complete: ${JSON.stringify(stats)}`);
-
-    // Store last compaction stats
-    await this.ctx.storage.put("last_compaction", stats);
-
-    // Reschedule for tomorrow
-    this.scheduleCompaction();
+    // Daily compaction: decay baselines, purge old anomalies, clean stale domains.
+    // 2026-08-24: the 03:00Z alarm threw 7 times (platform retries) then succeeded, and the
+    // platform's exception record carried NO message — seven blind error rows a day. Catch,
+    // log the real error with name/message/stack, record it, and retry ONCE in 10 minutes
+    // ourselves instead of letting the platform retry blind. Never rethrow without a record.
+    try {
+      const stats = runCompaction(this.ctx.storage.sql);
+      console.log(`Compaction complete: ${JSON.stringify(stats)}`);
+      await this.ctx.storage.put("last_compaction", stats);
+      await this.ctx.storage.delete("last_compaction_error");
+      this.scheduleCompaction();
+    } catch (err: any) {
+      const rec = { at: new Date().toISOString(), name: err?.name, message: String(err?.message ?? err), stack: String(err?.stack ?? "").slice(0, 800) };
+      console.error(`Compaction FAILED: ${JSON.stringify(rec)}`);
+      await this.ctx.storage.put("last_compaction_error", rec);
+      const prior = (await this.ctx.storage.get<number>("compaction_retry_count")) ?? 0;
+      if (prior < 1) {
+        await this.ctx.storage.put("compaction_retry_count", prior + 1);
+        this.ctx.storage.setAlarm(Date.now() + 10 * 60 * 1000);   // one bounded retry, with a record
+      } else {
+        await this.ctx.storage.delete("compaction_retry_count");
+        this.scheduleCompaction();                                 // give up until tomorrow; the error is on record
+      }
+    }
   }
 
   private initStorage(): void {
