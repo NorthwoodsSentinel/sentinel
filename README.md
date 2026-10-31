@@ -104,22 +104,24 @@ git clone https://github.com/NorthwoodsSentinel/sentinel.git
 cd sentinel
 
 # Install dependencies
-npm install
+bun install
 
 # Create Cloudflare resources
-wrangler r2 bucket create sentinel-telemetry
-wrangler d1 create sentinel-baselines
+bunx wrangler r2 bucket create sentinel-telemetry
+bunx wrangler d1 create sentinel-baselines
 # Copy the database_id into wrangler.toml
 
 # Set your Anthropic API key (for Tier 3 narratives)
-wrangler secret put ANTHROPIC_API_KEY
+bunx wrangler secret put ANTHROPIC_API_KEY
 
 # Deploy
-wrangler deploy
+bunx wrangler deploy
 
 # Test
 curl https://your-worker.workers.dev/health
 ```
+<!-- kintsugi: three rooms were kept furnished that no one ever entered, and the damp came in through them;
+       now the house is only the rooms it lives in. -->
 
 ### Configure Pollers
 
