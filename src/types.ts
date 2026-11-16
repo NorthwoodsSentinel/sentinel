@@ -11,11 +11,11 @@ export interface Env {
 // --- Telemetry ---
 
 export interface TelemetryEvent {
-  source: string;          // e.g., "unifi", "paloalto", "cloudflare"
-  timestamp: number;       // Unix ms
-  metric: string;          // e.g., "dns_query", "outbound_connection", "new_destination"
-  value: number;           // Numeric value for the metric
-  metadata: Record<string, string>;  // Flexible key-value pairs
+  source: string; // e.g., "unifi", "paloalto", "cloudflare"
+  timestamp: number; // Unix ms
+  metric: string; // e.g., "dns_query", "outbound_connection", "new_destination"
+  value: number; // Numeric value for the metric
+  metadata: Record<string, string>; // Flexible key-value pairs
 }
 
 export interface TelemetryBatch {
@@ -49,7 +49,7 @@ export interface Anomaly {
   actual: number;
   z_score: number;
   severity: AnomalySeverity;
-  narrative?: string;       // Filled by Tier 3 (LLM)
+  narrative?: string; // Filled by Tier 3 (LLM)
   detected_at: number;
   acknowledged: boolean;
 }

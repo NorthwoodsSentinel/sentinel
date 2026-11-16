@@ -6,10 +6,10 @@ import type { TelemetryEvent, BaselineEntry, Anomaly, AnomalySeverity, TierResul
 
 // Z-score thresholds for severity classification
 const THRESHOLDS = {
-  low: 2.0,       // 2σ — worth noting
-  medium: 2.5,    // 2.5σ — investigate
-  high: 3.0,      // 3σ — likely anomaly
-  critical: 4.0,  // 4σ — almost certainly anomalous
+  low: 2.0, // 2σ — worth noting
+  medium: 2.5, // 2.5σ — investigate
+  high: 3.0, // 3σ — likely anomaly
+  critical: 4.0, // 4σ — almost certainly anomalous
 } as const;
 
 function classifySeverity(zScore: number): AnomalySeverity | null {
@@ -21,10 +21,7 @@ function classifySeverity(zScore: number): AnomalySeverity | null {
   return null; // Within normal range
 }
 
-export function detectAnomaly(
-  event: TelemetryEvent,
-  baseline: BaselineEntry | null
-): TierResult {
+export function detectAnomaly(event: TelemetryEvent, baseline: BaselineEntry | null): TierResult {
   // No baseline yet — can't detect anomalies
   if (!baseline || baseline.count < 10) {
     return { tier: 2, action: "normal" };
@@ -70,10 +67,7 @@ export interface BaselineUpdate {
 
 // Welford's online algorithm for running mean/variance
 // Allows updating baseline incrementally without storing all values
-export function updateBaselineStats(
-  current: BaselineEntry | null,
-  update: BaselineUpdate
-): BaselineEntry {
+export function updateBaselineStats(current: BaselineEntry | null, update: BaselineUpdate): BaselineEntry {
   if (!current) {
     return {
       source: update.source,
@@ -114,15 +108,8 @@ export function updateBaselineStats(
 
 // --- D1 Operations ---
 
-export async function getBaseline(
-  db: D1Database,
-  source: string,
-  metric: string
-): Promise<BaselineEntry | null> {
-  const row = await db
-    .prepare("SELECT * FROM baselines WHERE source = ? AND metric = ?")
-    .bind(source, metric)
-    .first();
+export async function getBaseline(db: D1Database, source: string, metric: string): Promise<BaselineEntry | null> {
+  const row = await db.prepare("SELECT * FROM baselines WHERE source = ? AND metric = ?").bind(source, metric).first();
 
   if (!row) return null;
 
@@ -139,10 +126,7 @@ export async function getBaseline(
   };
 }
 
-export async function upsertBaseline(
-  db: D1Database,
-  entry: BaselineEntry
-): Promise<void> {
+export async function upsertBaseline(db: D1Database, entry: BaselineEntry): Promise<void> {
   await db
     .prepare(
       `INSERT INTO baselines (source, metric, mean, stddev, count, min_val, max_val, window_hours, updated_at)
@@ -153,7 +137,7 @@ export async function upsertBaseline(
          count = excluded.count,
          min_val = excluded.min_val,
          max_val = excluded.max_val,
-         updated_at = excluded.updated_at`
+         updated_at = excluded.updated_at`,
     )
     .bind(
       entry.source,
@@ -164,19 +148,16 @@ export async function upsertBaseline(
       entry.min,
       entry.max,
       entry.window_hours,
-      entry.updated_at
+      entry.updated_at,
     )
     .run();
 }
 
-export async function recordAnomaly(
-  db: D1Database,
-  anomaly: Anomaly
-): Promise<void> {
+export async function recordAnomaly(db: D1Database, anomaly: Anomaly): Promise<void> {
   await db
     .prepare(
       `INSERT INTO anomalies (id, source, metric, expected, actual, z_score, severity, narrative, detected_at, acknowledged)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       anomaly.id,
@@ -188,7 +169,7 @@ export async function recordAnomaly(
       anomaly.severity,
       anomaly.narrative || null,
       anomaly.detected_at,
-      anomaly.acknowledged ? 1 : 0
+      anomaly.acknowledged ? 1 : 0,
     )
     .run();
 }

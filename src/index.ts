@@ -26,7 +26,7 @@ export default {
 
     // Blog preview
     if (path === "/blog") {
-      const blogHtml = await import("./blog").then(m => m.blogHtml);
+      const blogHtml = await import("./blog").then((m) => m.blogHtml);
       return new Response(blogHtml, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -34,7 +34,7 @@ export default {
 
     // Journey
     if (path === "/journey") {
-      const journeyHtml = await import("./journey").then(m => m.journeyHtml);
+      const journeyHtml = await import("./journey").then((m) => m.journeyHtml);
       return new Response(journeyHtml, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -42,7 +42,7 @@ export default {
 
     // Substack preview
     if (path === "/substack") {
-      const substackHtml = await import("./substack").then(m => m.substackHtml);
+      const substackHtml = await import("./substack").then((m) => m.substackHtml);
       return new Response(substackHtml, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });

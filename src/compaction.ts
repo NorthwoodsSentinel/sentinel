@@ -21,29 +21,26 @@ interface CompactionStats {
 // Solution: Apply a decay factor that reduces the effective count
 // of old observations, making the baseline adapt to gradual changes.
 
-const DECAY_FACTOR = 0.995;  // Per-observation decay — ~50% weight after 138 observations
-const MIN_COUNT_AFTER_DECAY = 10;  // Never decay below this
+const DECAY_FACTOR = 0.995; // Per-observation decay — ~50% weight after 138 observations
+const MIN_COUNT_AFTER_DECAY = 10; // Never decay below this
 
 export function decayBaseline(
   mean: number,
   stddev: number,
   count: number,
-  decayFactor: number = DECAY_FACTOR
+  decayFactor: number = DECAY_FACTOR,
 ): { mean: number; stddev: number; count: number } {
   // Reduce effective count — this widens the confidence interval
   // for old data, making the baseline more responsive to recent changes
-  const decayedCount = Math.max(
-    MIN_COUNT_AFTER_DECAY,
-    Math.floor(count * decayFactor)
-  );
+  const decayedCount = Math.max(MIN_COUNT_AFTER_DECAY, Math.floor(count * decayFactor));
 
   // Slightly inflate stddev to account for potential drift
   // This prevents false positives from seasonal changes
-  const inflationFactor = 1 + (1 - decayFactor) * 2;  // ~1.01 per decay cycle
+  const inflationFactor = 1 + (1 - decayFactor) * 2; // ~1.01 per decay cycle
   const decayedStddev = stddev * inflationFactor;
 
   return {
-    mean,  // Mean stays — we don't shift it, just widen the envelope
+    mean, // Mean stays — we don't shift it, just widen the envelope
     stddev: decayedStddev,
     count: decayedCount,
   };
@@ -57,8 +54,8 @@ const ACKNOWLEDGED_RETENTION_DAYS = 7;
 export function getAnomalyPurgeCutoff(): { acknowledged: number; unacknowledged: number } {
   const now = Date.now();
   return {
-    acknowledged: now - (ACKNOWLEDGED_RETENTION_DAYS * 86400000),
-    unacknowledged: now - (ANOMALY_RETENTION_DAYS * 86400000),
+    acknowledged: now - ACKNOWLEDGED_RETENTION_DAYS * 86400000,
+    unacknowledged: now - ANOMALY_RETENTION_DAYS * 86400000,
   };
 }
 
@@ -68,7 +65,7 @@ export function getAnomalyPurgeCutoff(): { acknowledged: number; unacknowledged:
 const DOMAIN_STALE_DAYS = 90;
 
 export function getDomainStaleCutoff(): number {
-  return Date.now() - (DOMAIN_STALE_DAYS * 86400000);
+  return Date.now() - DOMAIN_STALE_DAYS * 86400000;
 }
 
 // --- R2 Compaction Strategy ---
@@ -86,7 +83,7 @@ export function getDomainStaleCutoff(): number {
 export interface HourlyAggregate {
   source: string;
   metric: string;
-  hour_start: number;  // Unix ms of the hour start
+  hour_start: number; // Unix ms of the hour start
   count: number;
   sum: number;
   mean: number;
@@ -98,21 +95,21 @@ export interface HourlyAggregate {
 export interface DailyAggregate {
   source: string;
   metric: string;
-  day_start: number;  // Unix ms of the day start (midnight UTC)
+  day_start: number; // Unix ms of the day start (midnight UTC)
   count: number;
   sum: number;
   mean: number;
   min: number;
   max: number;
   stddev: number;
-  hourly_breakdown: number[];  // 24-element array, count per hour
+  hourly_breakdown: number[]; // 24-element array, count per hour
 }
 
 // --- Compaction Runner ---
 // Called by the DO alarm system
 
 export function runCompaction(sql: {
-  exec: (query: string, ...params: any[]) => { toArray: () => any[] };
+  exec: (query: string, ...params: SqlStorageValue[]) => { toArray: () => Record<string, SqlStorageValue>[] };
 }): CompactionStats {
   const stats: CompactionStats = {
     anomalies_purged: 0,
@@ -123,26 +120,19 @@ export function runCompaction(sql: {
 
   // 1. Purge old acknowledged anomalies
   const ackCutoff = getAnomalyPurgeCutoff();
-  const ackResult = sql.exec(
-    "DELETE FROM anomalies WHERE acknowledged = 1 AND detected_at < ?",
-    ackCutoff.acknowledged
-  );
-  const unackResult = sql.exec(
-    "DELETE FROM anomalies WHERE detected_at < ?",
-    ackCutoff.unacknowledged
-  );
+  sql.exec("DELETE FROM anomalies WHERE acknowledged = 1 AND detected_at < ?", ackCutoff.acknowledged);
+  sql.exec("DELETE FROM anomalies WHERE detected_at < ?", ackCutoff.unacknowledged);
 
   // 2. Decay baselines
   const baselines = sql.exec("SELECT * FROM baselines").toArray();
   for (const b of baselines) {
-    const decayed = decayBaseline(
-      b.mean as number,
-      b.stddev as number,
-      b.count as number
-    );
+    const decayed = decayBaseline(b.mean as number, b.stddev as number, b.count as number);
     sql.exec(
       "UPDATE baselines SET stddev = ?, count = ? WHERE source = ? AND metric = ?",
-      decayed.stddev, decayed.count, b.source, b.metric
+      decayed.stddev,
+      decayed.count,
+      b.source,
+      b.metric,
     );
     stats.baselines_decayed++;
   }
@@ -150,23 +140,20 @@ export function runCompaction(sql: {
   // Decay hourly baselines too
   const hourlyBaselines = sql.exec("SELECT * FROM hourly_baselines").toArray();
   for (const b of hourlyBaselines) {
-    const decayed = decayBaseline(
-      b.mean as number,
-      b.stddev as number,
-      b.count as number
-    );
+    const decayed = decayBaseline(b.mean as number, b.stddev as number, b.count as number);
     sql.exec(
       "UPDATE hourly_baselines SET stddev = ?, count = ? WHERE source = ? AND metric = ? AND hour = ?",
-      decayed.stddev, decayed.count, b.source, b.metric, b.hour
+      decayed.stddev,
+      decayed.count,
+      b.source,
+      b.metric,
+      b.hour,
     );
   }
 
   // 3. Clean stale domains
   const domainCutoff = getDomainStaleCutoff();
-  sql.exec(
-    "DELETE FROM known_domains WHERE last_seen < ? AND total_queries <= 2",
-    domainCutoff
-  );
+  sql.exec("DELETE FROM known_domains WHERE last_seen < ? AND total_queries <= 2", domainCutoff);
 
   return stats;
 }

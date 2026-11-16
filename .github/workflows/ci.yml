@@ -1,0 +1,40 @@
+# CI: the same four checks `bun run local:gate` runs (format check, lint, typecheck, tests with the 90%
+# per-file coverage bar and the gate-scope check). Run as separate steps so a failure names its stage;
+# CI never calls a `local:*` script (AGENTS.md "Mandatory pre-push gate").
+#
+# This workflow NEVER deploys. It holds no secret and its token is read-only. Deploying sentinel is a
+# human act (`bun run deploy` by whoever operates an instance, into their own Cloudflare account); do not add a
+# deploy job here.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege for GITHUB_TOKEN: nothing here writes to the repo.
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # Hung-job guard, not a flake remedy: about twice the slowest observed run, rounded up to five minutes.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          # Vitest runs on Node, and the test doubles use node:sqlite, which needs Node 22 or newer.
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned exactly and stated once; matches the version the gate was measured with.
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test

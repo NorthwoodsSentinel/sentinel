@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260401.0",
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.4",
+    "@vitest/coverage-v8": "^5.1.0",
+    "eslint": "^10.15.0",
+    "prettier": "^3.10.1",
     "typescript": "^5.8.0",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0",
     "wrangler": "^4.151.1"
   },
   "description": "Edge-native network intelligence — AI that knows how a network lives",
@@ -11,6 +18,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json",
+    "test": "vitest run --coverage && bun scripts/verify-gate-scope.ts",
+    "local:gate": "bun run format:check && bun run lint && bun run typecheck && bun run test"
   }
 }
