@@ -3,9 +3,9 @@
 // Forensic methodology encoded as edge compute.
 
 import { DurableObject } from "cloudflare:workers";
-import type { Env, TelemetryEvent, TelemetryBatch, Anomaly, SentinelState, IngestResponse } from "./types";
+import type { Env, TelemetryBatch, Anomaly, SentinelState, IngestResponse } from "./types";
 import { tier1BatchFilter } from "./tier1";
-import { detectAnomaly, getBaseline, upsertBaseline, updateBaselineStats, recordAnomaly } from "./tier2";
+import { detectAnomaly, updateBaselineStats } from "./tier2";
 import { generateNarrative } from "./tier3";
 import { runCompaction } from "./compaction";
 
@@ -22,7 +22,8 @@ export class SentinelAgent extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.initStorage();
-    this.loadState();
+    // Not awaited, as before: the constructor cannot await. Storage reads are ordered by the DO's input gate.
+    void this.loadState();
     this.scheduleCompaction();
   }
 
@@ -34,7 +35,8 @@ export class SentinelAgent extends DurableObject<Env> {
     if (next3AM.getTime() <= now.getTime()) {
       next3AM.setUTCDate(next3AM.getUTCDate() + 1);
     }
-    this.ctx.storage.setAlarm(next3AM.getTime());
+    // Not awaited, as before (callers are synchronous); the DO's output gate holds the write.
+    void this.ctx.storage.setAlarm(next3AM.getTime());
   }
 
   async alarm(): Promise<void> {
@@ -49,17 +51,24 @@ export class SentinelAgent extends DurableObject<Env> {
       await this.ctx.storage.put("last_compaction", stats);
       await this.ctx.storage.delete("last_compaction_error");
       this.scheduleCompaction();
-    } catch (err: any) {
-      const rec = { at: new Date().toISOString(), name: err?.name, message: String(err?.message ?? err), stack: String(err?.stack ?? "").slice(0, 800) };
+    } catch (caught: unknown) {
+      // Same reads as before, typed: a thrown value may be anything, so every property is optional.
+      const err = caught as { name?: unknown; message?: unknown; stack?: unknown } | null | undefined;
+      const rec = {
+        at: new Date().toISOString(),
+        name: err?.name,
+        message: String(err?.message ?? err),
+        stack: String(err?.stack ?? "").slice(0, 800),
+      };
       console.error(`Compaction FAILED: ${JSON.stringify(rec)}`);
       await this.ctx.storage.put("last_compaction_error", rec);
       const prior = (await this.ctx.storage.get<number>("compaction_retry_count")) ?? 0;
       if (prior < 1) {
         await this.ctx.storage.put("compaction_retry_count", prior + 1);
-        this.ctx.storage.setAlarm(Date.now() + 10 * 60 * 1000);   // one bounded retry, with a record
+        void this.ctx.storage.setAlarm(Date.now() + 10 * 60 * 1000); // one bounded retry, with a record
       } else {
         await this.ctx.storage.delete("compaction_retry_count");
-        this.scheduleCompaction();                                 // give up until tomorrow; the error is on record
+        this.scheduleCompaction(); // give up until tomorrow; the error is on record
       }
     }
   }
@@ -182,7 +191,7 @@ export class SentinelAgent extends DurableObject<Env> {
     let anomalyCount = 0;
 
     // Tier 1: Fast filter
-    const { known_good, known_bad, needs_analysis } = tier1BatchFilter(batch.events);
+    const { known_bad, needs_analysis } = tier1BatchFilter(batch.events);
 
     // Record known-bad as immediate anomalies
     for (const event of known_bad) {
@@ -223,13 +232,12 @@ export class SentinelAgent extends DurableObject<Env> {
       // - Use hourly baseline if it has enough data (more precise)
       // - Fall back to global baseline otherwise
       const hourlyBaseline = this.getHourlyBaseline(event.source, event.metric, currentHour);
-      const bestBaseline = (hourlyBaseline && hourlyBaseline.count >= 5) ? hourlyBaseline : currentBaseline;
+      const bestBaseline = hourlyBaseline && hourlyBaseline.count >= 5 ? hourlyBaseline : currentBaseline;
 
       // Check for anomaly against the PREVIOUS baseline (before this event)
       if (bestBaseline && bestBaseline.count >= 10) {
         const result = detectAnomaly(event, bestBaseline);
         if (result.tier === 2 && result.action === "anomaly") {
-          const isHourly = (hourlyBaseline && hourlyBaseline.count >= 5);
           const anomaly: Anomaly = {
             id: `${event.source}-${event.timestamp}-${crypto.randomUUID().slice(0, 8)}`,
             source: event.source,
@@ -237,7 +245,14 @@ export class SentinelAgent extends DurableObject<Env> {
             expected: bestBaseline.mean,
             actual: event.value,
             z_score: result.z_score,
-            severity: result.z_score >= 4 ? "critical" : result.z_score >= 3 ? "high" : result.z_score >= 2.5 ? "medium" : "low",
+            severity:
+              result.z_score >= 4
+                ? "critical"
+                : result.z_score >= 3
+                  ? "high"
+                  : result.z_score >= 2.5
+                    ? "medium"
+                    : "low",
             detected_at: Date.now(),
             acknowledged: false,
           };
@@ -253,8 +268,11 @@ export class SentinelAgent extends DurableObject<Env> {
       for (const event of needs_analysis) {
         const currentBaseline = this.getBaselineLocal(event.source, event.metric);
         const matchingAnomaly = recentAnomalies.find(
-          a => a.source === event.source && a.metric === event.metric && !a.narrative &&
-               (a.severity === "medium" || a.severity === "high" || a.severity === "critical")
+          (a) =>
+            a.source === event.source &&
+            a.metric === event.metric &&
+            !a.narrative &&
+            (a.severity === "medium" || a.severity === "high" || a.severity === "critical"),
         );
         if (matchingAnomaly) {
           this.ctx.waitUntil(
@@ -265,15 +283,18 @@ export class SentinelAgent extends DurableObject<Env> {
                 recentAnomalies,
                 totalEventsIngested: this.state.total_events_ingested,
               },
-              this.env.ANTHROPIC_API_KEY
-            ).then(narrative => {
-              this.ctx.storage.sql.exec(
-                "UPDATE anomalies SET narrative = ? WHERE id = ?",
-                narrative, matchingAnomaly.id
-              );
-            }).catch(err => {
-              console.error(`Tier 3 narrative failed for ${matchingAnomaly.id}:`, err);
-            })
+              this.env.ANTHROPIC_API_KEY,
+            )
+              .then((narrative) => {
+                this.ctx.storage.sql.exec(
+                  "UPDATE anomalies SET narrative = ? WHERE id = ?",
+                  narrative,
+                  matchingAnomaly.id,
+                );
+              })
+              .catch((err) => {
+                console.error(`Tier 3 narrative failed for ${matchingAnomaly.id}:`, err);
+              }),
           );
         }
       }
@@ -312,7 +333,7 @@ export class SentinelAgent extends DurableObject<Env> {
           event.metadata.device_name,
           event.metadata?.ip_address || "",
           event.metadata?.device_type || "unknown",
-          event.metadata?.vlan || ""
+          event.metadata?.vlan || "",
         );
       }
     }
@@ -382,8 +403,15 @@ export class SentinelAgent extends DurableObject<Env> {
          min_val = excluded.min_val,
          max_val = excluded.max_val,
          updated_at = excluded.updated_at`,
-      entry.source, entry.metric, entry.mean, entry.stddev, entry.count,
-      entry.min, entry.max, entry.window_hours, entry.updated_at
+      entry.source,
+      entry.metric,
+      entry.mean,
+      entry.stddev,
+      entry.count,
+      entry.min,
+      entry.max,
+      entry.window_hours,
+      entry.updated_at,
     );
   }
 
@@ -391,9 +419,16 @@ export class SentinelAgent extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       `INSERT INTO anomalies (id, source, metric, expected, actual, z_score, severity, narrative, detected_at, acknowledged)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      anomaly.id, anomaly.source, anomaly.metric, anomaly.expected, anomaly.actual,
-      anomaly.z_score, anomaly.severity, anomaly.narrative || null, anomaly.detected_at,
-      anomaly.acknowledged ? 1 : 0
+      anomaly.id,
+      anomaly.source,
+      anomaly.metric,
+      anomaly.expected,
+      anomaly.actual,
+      anomaly.z_score,
+      anomaly.severity,
+      anomaly.narrative || null,
+      anomaly.detected_at,
+      anomaly.acknowledged ? 1 : 0,
     );
   }
 
@@ -426,7 +461,13 @@ export class SentinelAgent extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         `INSERT INTO hourly_baselines (source, metric, hour, mean, stddev, count, min_val, max_val, updated_at)
          VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)`,
-        source, metric, hour, value, value, value, timestamp
+        source,
+        metric,
+        hour,
+        value,
+        value,
+        value,
+        timestamp,
       );
       return;
     }
@@ -443,8 +484,15 @@ export class SentinelAgent extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       `UPDATE hourly_baselines SET mean = ?, stddev = ?, count = ?, min_val = ?, max_val = ?, updated_at = ?
        WHERE source = ? AND metric = ? AND hour = ?`,
-      newMean, newStddev, n, Math.min(existing.min, value), Math.max(existing.max, value), timestamp,
-      source, metric, hour
+      newMean,
+      newStddev,
+      n,
+      Math.min(existing.min, value),
+      Math.max(existing.max, value),
+      timestamp,
+      source,
+      metric,
+      hour,
     );
   }
 
@@ -459,7 +507,13 @@ export class SentinelAgent extends DurableObject<Env> {
          name = excluded.name,
          ip_address = excluded.ip_address,
          last_seen = excluded.last_seen`,
-      mac, name, ip, deviceType, vlan, now, now
+      mac,
+      name,
+      ip,
+      deviceType,
+      vlan,
+      now,
+      now,
     );
   }
 
@@ -475,7 +529,8 @@ export class SentinelAgent extends DurableObject<Env> {
       // Known domain — update last_seen and count
       this.ctx.storage.sql.exec(
         "UPDATE known_domains SET last_seen = ?, total_queries = total_queries + 1 WHERE domain = ?",
-        now, domain
+        now,
+        domain,
       );
       return false; // not new
     } else {
@@ -483,17 +538,26 @@ export class SentinelAgent extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         `INSERT INTO known_domains (domain, first_seen, last_seen, total_queries, categories, application)
          VALUES (?, ?, ?, 1, ?, ?)`,
-        domain, now, now, categories, application
+        domain,
+        now,
+        now,
+        categories,
+        application,
       );
       return true; // first time
     }
   }
 
-  private getRecentNewDomains(limit: number): Array<{ domain: string; first_seen: number; categories: string; application: string }> {
+  private getRecentNewDomains(
+    limit: number,
+  ): Array<{ domain: string; first_seen: number; categories: string; application: string }> {
     return this.ctx.storage.sql
-      .exec("SELECT domain, first_seen, categories, application FROM known_domains ORDER BY first_seen DESC LIMIT ?", limit)
+      .exec(
+        "SELECT domain, first_seen, categories, application FROM known_domains ORDER BY first_seen DESC LIMIT ?",
+        limit,
+      )
       .toArray()
-      .map(row => ({
+      .map((row) => ({
         domain: row.domain as string,
         first_seen: row.first_seen as number,
         categories: (row.categories as string) || "",
@@ -513,7 +577,8 @@ export class SentinelAgent extends DurableObject<Env> {
     if (!webhookUrl) return;
 
     const payload = {
-      content: `**[${(anomaly.severity || "unknown").toUpperCase()}] Sentinel Alert**\n` +
+      content:
+        `**[${(anomaly.severity || "unknown").toUpperCase()}] Sentinel Alert**\n` +
         `**${anomaly.source}** : ${anomaly.metric}\n` +
         `Expected: ${(anomaly.expected || 0).toFixed(1)} — Actual: ${anomaly.actual} — Z-score: ${(anomaly.z_score || 0).toFixed(1)}σ\n` +
         (anomaly.narrative ? `\n${anomaly.narrative.slice(0, 500)}` : ""),
@@ -528,7 +593,11 @@ export class SentinelAgent extends DurableObject<Env> {
 
       this.ctx.storage.sql.exec(
         "INSERT INTO alerts (id, anomaly_id, channel, sent_at, payload) VALUES (?, ?, ?, ?, ?)",
-        crypto.randomUUID(), anomaly.id, "webhook", Date.now(), JSON.stringify(payload)
+        crypto.randomUUID(),
+        anomaly.id,
+        "webhook",
+        Date.now(),
+        JSON.stringify(payload),
       );
     } catch (err) {
       console.error("Alert send failed:", err);
@@ -580,9 +649,7 @@ export class SentinelAgent extends DurableObject<Env> {
   }
 
   async getBaselines(): Promise<import("./types").BaselineEntry[]> {
-    const rows = this.ctx.storage.sql
-      .exec("SELECT * FROM baselines ORDER BY source, metric")
-      .toArray();
+    const rows = this.ctx.storage.sql.exec("SELECT * FROM baselines ORDER BY source, metric").toArray();
 
     return rows.map((row) => ({
       source: row.source as string,
@@ -616,7 +683,7 @@ export class SentinelAgent extends DurableObject<Env> {
 
     try {
       if (path === "/ingest" && request.method === "POST") {
-        const batch = await request.json() as TelemetryBatch;
+        const batch = (await request.json()) as TelemetryBatch;
         const result = await this.ingest(batch);
         return Response.json(result, { headers: corsHeaders });
       }
@@ -641,16 +708,16 @@ export class SentinelAgent extends DurableObject<Env> {
         if (!this.env.ANTHROPIC_API_KEY) {
           return Response.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 503, headers: corsHeaders });
         }
-        const { anomaly_id } = await request.json() as { anomaly_id: string };
+        const { anomaly_id } = (await request.json()) as { anomaly_id: string };
         const anomalies = this.getRecentAnomaliesLocal(100);
-        const anomaly = anomalies.find(a => a.id === anomaly_id);
+        const anomaly = anomalies.find((a) => a.id === anomaly_id);
         if (!anomaly) {
           return Response.json({ error: "Anomaly not found" }, { status: 404, headers: corsHeaders });
         }
         const baseline = this.getBaselineLocal(anomaly.source, anomaly.metric);
         const narrative = await generateNarrative(
           { anomaly, baseline, recentAnomalies: anomalies, totalEventsIngested: this.state.total_events_ingested },
-          this.env.ANTHROPIC_API_KEY
+          this.env.ANTHROPIC_API_KEY,
         );
         // Update the stored anomaly with the narrative
         this.ctx.storage.sql.exec("UPDATE anomalies SET narrative = ? WHERE id = ?", narrative, anomaly_id);
@@ -659,9 +726,7 @@ export class SentinelAgent extends DurableObject<Env> {
 
       // Devices registry
       if (path === "/devices") {
-        const rows = this.ctx.storage.sql
-          .exec("SELECT * FROM devices ORDER BY last_seen DESC")
-          .toArray();
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM devices ORDER BY last_seen DESC").toArray();
         return Response.json(rows, { headers: corsHeaders });
       }
 
@@ -669,9 +734,10 @@ export class SentinelAgent extends DurableObject<Env> {
       if (path === "/domains") {
         const limit = parseInt(url.searchParams.get("limit") || "50");
         const sort = url.searchParams.get("sort") || "recent"; // recent or frequent
-        const query = sort === "frequent"
-          ? "SELECT * FROM known_domains ORDER BY total_queries DESC LIMIT ?"
-          : "SELECT * FROM known_domains ORDER BY first_seen DESC LIMIT ?";
+        const query =
+          sort === "frequent"
+            ? "SELECT * FROM known_domains ORDER BY total_queries DESC LIMIT ?"
+            : "SELECT * FROM known_domains ORDER BY first_seen DESC LIMIT ?";
         const rows = this.ctx.storage.sql.exec(query, limit).toArray();
         const total = this.getKnownDomainCount();
         return Response.json({ total_known_domains: total, domains: rows }, { headers: corsHeaders });
@@ -680,7 +746,7 @@ export class SentinelAgent extends DurableObject<Env> {
       // New domains — only domains first seen in the last N hours
       if (path === "/domains/new") {
         const hours = parseInt(url.searchParams.get("hours") || "24");
-        const since = Date.now() - (hours * 60 * 60 * 1000);
+        const since = Date.now() - hours * 60 * 60 * 1000;
         const rows = this.ctx.storage.sql
           .exec("SELECT * FROM known_domains WHERE first_seen > ? ORDER BY first_seen DESC", since)
           .toArray();
@@ -689,7 +755,7 @@ export class SentinelAgent extends DurableObject<Env> {
 
       // Configure alert webhook
       if (path === "/alerts/webhook" && request.method === "POST") {
-        const { url: webhookUrl } = await request.json() as { url: string };
+        const { url: webhookUrl } = (await request.json()) as { url: string };
         await this.ctx.storage.put("alert_webhook", webhookUrl);
         return Response.json({ configured: true, url: webhookUrl }, { headers: corsHeaders });
       }
@@ -703,16 +769,16 @@ export class SentinelAgent extends DurableObject<Env> {
       // Alert history
       if (path === "/alerts") {
         const limit = parseInt(url.searchParams.get("limit") || "20");
-        const rows = this.ctx.storage.sql
-          .exec("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT ?", limit)
-          .toArray();
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM alerts ORDER BY sent_at DESC LIMIT ?", limit).toArray();
         return Response.json(rows, { headers: corsHeaders });
       }
 
       // Compaction status
       if (path === "/compaction") {
         const lastCompaction = await this.ctx.storage.get("last_compaction");
-        return Response.json(lastCompaction || { message: "No compaction has run yet. Scheduled daily at 3 AM UTC." }, { headers: corsHeaders });
+        return Response.json(lastCompaction || { message: "No compaction has run yet. Scheduled daily at 3 AM UTC." }, {
+          headers: corsHeaders,
+        });
       }
 
       // Force compaction (manual trigger)
@@ -727,7 +793,7 @@ export class SentinelAgent extends DurableObject<Env> {
         const metric = url.searchParams.get("metric") || "";
         const source = url.searchParams.get("source") || "";
         let query = "SELECT * FROM hourly_baselines";
-        const params: any[] = [];
+        const params: string[] = [];
         if (source && metric) {
           query += " WHERE source = ? AND metric = ?";
           params.push(source, metric);
@@ -741,18 +807,20 @@ export class SentinelAgent extends DurableObject<Env> {
       if (path === "/status/full") {
         const status = await this.getStatus();
         const domainCount = this.getKnownDomainCount();
-        const deviceCount = this.ctx.storage.sql
-          .exec("SELECT COUNT(*) as cnt FROM devices").toArray()[0];
+        const deviceCount = this.ctx.storage.sql.exec("SELECT COUNT(*) as cnt FROM devices").toArray()[0];
         const recentNewDomains = this.ctx.storage.sql
           .exec("SELECT COUNT(*) as cnt FROM known_domains WHERE first_seen > ?", Date.now() - 86400000)
           .toArray()[0];
 
-        return Response.json({
-          ...status,
-          known_domains: domainCount,
-          tracked_devices: (deviceCount?.cnt as number) || 0,
-          new_domains_24h: (recentNewDomains?.cnt as number) || 0,
-        }, { headers: corsHeaders });
+        return Response.json(
+          {
+            ...status,
+            known_domains: domainCount,
+            tracked_devices: (deviceCount?.cnt as number) || 0,
+            new_domains_24h: (recentNewDomains?.cnt as number) || 0,
+          },
+          { headers: corsHeaders },
+        );
       }
 
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });

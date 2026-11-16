@@ -1,6 +1,9 @@
 // Sentinel Dashboard v3
 // "I'll make some sense out of the world" — Gord Downie
 
+// The page reads its client from its own URL (CONFIG.CLIENT), so the argument is unused; the signature is kept
+// because src/index.ts passes it and changing callers is out of scope for a gate-only change.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for the caller's signature, see above
 export function renderDashboard(clientId: string): string {
   return `<!DOCTYPE html>
 <html lang="en">

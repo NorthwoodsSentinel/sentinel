@@ -1,0 +1,11 @@
+# Build output and installs are never a gate target (AGENTS.md).
+node_modules/
+.wrangler/
+coverage/
+dist/
+bun.lock
+# Prose is out of the format scope: prettier rewrites Markdown (list markers, escapes).
+*.md
+# A static copy of the dashboard page that no module imports or serves; left byte-for-byte as it is on main
+# rather than reformatted (the live page is src/dashboard.ts, which is in scope).
+src/dashboard-v3.html

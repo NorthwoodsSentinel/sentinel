@@ -11,9 +11,17 @@ const KNOWN_GOOD: Array<{ metric: string; pattern: RegExp; reason: string }> = [
   // NTP
   { metric: "outbound_connection", pattern: /^(time\.|ntp\.|pool\.ntp\.org)/, reason: "ntp_sync" },
   // OS update servers
-  { metric: "outbound_connection", pattern: /\.(windowsupdate\.com|apple\.com\/updates|ubuntu\.com)$/, reason: "os_updates" },
+  {
+    metric: "outbound_connection",
+    pattern: /\.(windowsupdate\.com|apple\.com\/updates|ubuntu\.com)$/,
+    reason: "os_updates",
+  },
   // CDN traffic
-  { metric: "outbound_connection", pattern: /\.(cloudflare\.com|akamaized\.net|cloudfront\.net|fastly\.net)$/, reason: "cdn_traffic" },
+  {
+    metric: "outbound_connection",
+    pattern: /\.(cloudflare\.com|akamaized\.net|cloudfront\.net|fastly\.net)$/,
+    reason: "cdn_traffic",
+  },
 
   // --- IoT Known-Good (common smart home chatter) ---
   // Amazon Echo / Alexa
@@ -29,7 +37,11 @@ const KNOWN_GOOD: Array<{ metric: string; pattern: RegExp; reason: string }> = [
   { metric: "dns_domain_queries", pattern: /\.googleapis\.com$/, reason: "google_apis" },
   { metric: "dns_domain_queries", pattern: /\.gstatic\.com$/, reason: "google_static" },
   // Microsoft / Teams
-  { metric: "dns_domain_queries", pattern: /\.(microsoft|office|teams|outlook|live)\.com$/, reason: "microsoft_services" },
+  {
+    metric: "dns_domain_queries",
+    pattern: /\.(microsoft|office|teams|outlook|live)\.com$/,
+    reason: "microsoft_services",
+  },
   { metric: "dns_domain_queries", pattern: /\.office\.net$/, reason: "office_cdn" },
   // TP-Link smart plugs (Kasa/HS103)
   { metric: "dns_domain_queries", pattern: /\.tplinkcloud\.com$/, reason: "tplink_smart_home" },

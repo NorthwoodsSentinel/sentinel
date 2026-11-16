@@ -6,3 +6,7 @@ dist/
 poller/.env
 !poller/.env.example
 *.log
+
+# Gate output and agent scratch (never committed)
+coverage/
+.scratch/

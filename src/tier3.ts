@@ -50,12 +50,17 @@ function buildPrompt(ctx: NarrativeContext): string {
   if (recentAnomalies.length > 0) {
     prompt += `## Recent Anomaly Context (last 24h)\n`;
     prompt += `- Total anomalies in window: ${recentAnomalies.length}\n`;
-    const bySeverity = recentAnomalies.reduce((acc, a) => {
-      acc[a.severity] = (acc[a.severity] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    prompt += `- By severity: ${Object.entries(bySeverity).map(([k, v]) => `${k}=${v}`).join(", ")}\n`;
-    const sameMetric = recentAnomalies.filter(a => a.metric === anomaly.metric).length;
+    const bySeverity = recentAnomalies.reduce(
+      (acc, a) => {
+        acc[a.severity] = (acc[a.severity] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    prompt += `- By severity: ${Object.entries(bySeverity)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", ")}\n`;
+    const sameMetric = recentAnomalies.filter((a) => a.metric === anomaly.metric).length;
     if (sameMetric > 1) {
       prompt += `- Same metric repeated ${sameMetric} times — possible pattern\n`;
     }
@@ -70,10 +75,7 @@ function buildPrompt(ctx: NarrativeContext): string {
   return prompt;
 }
 
-export async function generateNarrative(
-  ctx: NarrativeContext,
-  apiKey: string
-): Promise<string> {
+export async function generateNarrative(ctx: NarrativeContext, apiKey: string): Promise<string> {
   const prompt = buildPrompt(ctx);
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -87,9 +89,7 @@ export async function generateNarrative(
       model: "claude-sonnet-4-6",
       max_tokens: 512,
       system: SYSTEM_PROMPT,
-      messages: [
-        { role: "user", content: prompt }
-      ],
+      messages: [{ role: "user", content: prompt }],
     }),
   });
 
@@ -98,7 +98,7 @@ export async function generateNarrative(
     throw new Error(`Claude API error (${response.status}): ${error}`);
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     content: Array<{ type: string; text: string }>;
   };
 
