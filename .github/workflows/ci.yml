@@ -25,6 +25,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          # Vitest runs on Node, and the test doubles use node:sqlite, which needs Node 22 or newer.
+          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           # Pinned exactly and stated once; matches the version the gate was measured with.
